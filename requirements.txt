@@ -1,14 +1,8 @@
 streamlit
-pandas 
+pandas
 numpy
 plotly
-pydeck 
-pathlib
-datetime
-numpy
-pandas
+pydeck
 requests
 timezonefinder
-zoneinfo
-gridstatus 
-
+gridstatus
