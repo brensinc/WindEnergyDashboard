@@ -1,409 +1,112 @@
-import json
-from pathlib import Path
-from datetime import datetime, timezone
-
-import numpy as np
-import pandas as pd
-import requests
 import streamlit as st
+import pandas as pd
+import numpy as np
 import plotly.express as px
 import pydeck as pdk
-import inspect
-from timezonefinder import TimezoneFinder
-from zoneinfo import ZoneInfo 
-import gridstatus
 
-# -----------------------------
-# Config
-# -----------------------------
+
+from windlib import (
+    load_projects_from_disk,
+    save_projects_to_disk,
+    DEFAULT_PROJECT,
+    get_tz_from_latlon,
+    get_wind_data,
+    add_data_type,
+    add_power_output,
+    add_prices_and_revenue,
+    ISO_CHOICES,
+    LMP_MARKETS,
+    PRICE_MODELS,  # if you have it; otherwise define locally
+    monthly_capacity_factor, 
+    seasonal_capacity_factor,
+    exceedance_curve, 
+    downtime_risk_by_month,
+    annual_energy_bootstrap, 
+    interannual_variability,
+    save_projects_to_disk, 
+    ISO_CHOICES, 
+    LMP_MARKETS
+)
+
 st.set_page_config(page_title="Wind Energy Dashboard", layout="wide")
 
-PROJECTS_FILE = Path("projects.json")  # optional persistence
-
-DEFAULT_PROJECT = {
-    "project_id": "demo",
-    "name": "Demo Wind Project",
-    "latitude": 37.75,
-    "longitude": -122.45,
-    "hub_height_m": 80,
-    "cut_in_mps": 3.0,
-    "rated_speed_mps": 12.0,
-    "cut_out_mps": 25.0,
-    "rated_power_mw": 3.0,
-}
-
-# Pricing options
-PRICE_MODELS = ["Fixed price ($/MWh)", "Market price (gridstatus)"]
-
-# ISO choices (keep this explicit & stable)
-ISO_CHOICES = ["CAISO", "ERCOT", "ISONE", "MISO", "NYISO", "PJM", "SPP"]
-
-# Market choices (these strings are used by gridstatus across ISOs for LMP queries)
-LMP_MARKETS = ["DAY_AHEAD_HOURLY", "REAL_TIME_HOURLY", "REAL_TIME_5_MIN"]
-
-
 # -----------------------------
-# Persistence helpers
-# -----------------------------
-def load_projects_from_disk() -> dict:
-    if PROJECTS_FILE.exists():
-        try:
-            return json.loads(PROJECTS_FILE.read_text())
-        except Exception:
-            return {}
-    return {}
-
-def save_projects_to_disk(projects: dict) -> None:
-    PROJECTS_FILE.write_text(json.dumps(projects, indent=2, sort_keys=True))
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_market_prices_gridstatus(
-    iso_name: str,
-    start_date: str,
-    end_date: str,
-    market: str = "DAY_AHEAD_HOURLY",
-    location_type: str = "Hub",
-) -> pd.DataFrame:
-    import gridstatus
-
-    iso_class = getattr(gridstatus, iso_name, None)
-    if iso_class is None:
-        raise ValueError(f"Unsupported ISO class: {iso_name}")
-
-    iso = iso_class()
-    
-
-    # Build kwargs safely based on supported signature
-    sig = inspect.signature(iso.get_lmp)
-    kwargs = {
-        "start": pd.Timestamp(start_date),
-        "end": pd.Timestamp(end_date),
-        "market": market,
-    }
-    if "location_type" in sig.parameters:
-        kwargs["location_type"] = location_type
-
-    df = iso.get_lmp(**kwargs)
-
-    st.write(df)
-
-    if df is None or len(df) == 0:
-        raise ValueError("No LMP data returned from gridstatus for this query.")
-
-    # Normalize time column name: gridstatus commonly returns 'Time' (capital T)
-    # We’ll handle a few common variants.
-    time_col = None
-    for c in ["Time", "time", "timestamp", "Datetime", "DATETIME"]:
-        if c in df.columns:
-            time_col = c
-            break
-    if time_col is None:
-        raise ValueError(f"Could not find a time column in LMP data. Columns: {list(df.columns)}")
-
-    # Normalize price column: often 'LMP'
-    price_col = None
-    for c in ["LMP", "lmp", "price", "Price", "LBMP"]:
-        if c in df.columns:
-            price_col = c
-            break
-    if price_col is None:
-        raise ValueError(f"Could not find a price column in LMP data. Columns: {list(df.columns)}")
-
-    out = df.copy()
-    out = out.rename(columns={time_col: "timestamp", price_col: "price_usd_mwh"})
-    out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True)
-
-    # MVP: reduce to a single “proxy” price per timestamp
-    # (mean over hubs returned). You can replace with hub selection later.
-    out = (
-        out.groupby("timestamp", as_index=False)["price_usd_mwh"]
-        .mean()
-        .sort_values("timestamp")
-    )
-
-    st.write("DEBUG 1")
-    st.write(out)
-
-    return out
-
-def get_tz_from_latlon(lat: float, lon: float) -> ZoneInfo:
-    _tf = TimezoneFinder()
-    tzname = _tf.timezone_at(lat=lat, lng=lon)
-    if tzname is None:
-        return ZoneInfo("UTC")
-    return ZoneInfo(tzname)
-
-def add_prices_and_revenue(df: pd.DataFrame, project: dict) -> pd.DataFrame:
-    """
-    Adds price_usd_mwh and revenue_usd columns to df (wind/power dataframe).
-    """
-    out = df.copy()
-
-    if project.get("pricing_model") == "fixed":
-        fixed = float(project.get("fixed_price_usd_mwh", 0.0))
-        out["price_usd_mwh"] = fixed
-
-    elif project.get("pricing_model") == "market":
-        iso_name = project.get("iso_name")
-        market = project.get("lmp_market", "DAY_AHEAD_HOURLY")
-        location_type = project.get("location_type", "Hub")
-
-        prices = get_market_prices_gridstatus(
-            iso_name=iso_name,
-            start_date=str(out["timestamp"].min().date()),
-            end_date=str(out["timestamp"].max().date()),
-            market=market,
-            location_type=location_type,
-        )
-
-        # Merge prices onto wind timestamps
-        out = out.merge(prices, on="timestamp", how="left")
-
-        # If the price series is sparse (e.g., DA hourly but your df is hourly too),
-        # forward-fill within the time range
-        out["price_usd_mwh"] = out["price_usd_mwh"].ffill()
-
-    else:
-        out["price_usd_mwh"] = np.nan
-
-    # Revenue in $ per interval
-    out["revenue_usd"] = out["energy_mwh"] * out["price_usd_mwh"]
-    out["revenue_usd"] = out["revenue_usd"].astype(float)
-
-    return out
-
-def get_wind_data(lat: float, lon: float, date_start: str, date_end: str, hub_height_m: int) -> pd.DataFrame:
-    """
-    Fetch wind speed + direction from Open-Meteo. Cached with TTL to avoid repeated requests.
-    Returns UTC-aware timestamps and wind speed in m/s.
-    """
-    url = "https://api.open-meteo.com/v1/forecast"
-    # url = "https://api.open-meteo.com/v1/archive"
-
-
-    # Open-Meteo uses variables like wind_speed_80m, wind_speed_100m, etc.
-    # We'll request the closest supported height by snapping to common heights.
-    # You can expand this later.
-    supported_heights = [10, 80, 120, 180]
-    height = min(supported_heights, key=lambda h: abs(h - hub_height_m))
-
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "hourly": [f"wind_speed_{height}m", f"wind_direction_{height}m"],
-        "wind_speed_unit": "ms",      # IMPORTANT: get m/s directly
-        "timezone": "UTC",
-        "start_date": date_start,
-        "end_date": date_end,
-    }
-
-    r = requests.get(url, params=params, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-
-    hourly = data.get("hourly", {})
-    time = hourly.get("time", [])
-    ws = hourly.get(f"wind_speed_{height}m", [])
-    wd = hourly.get(f"wind_direction_{height}m", [])
-
-    if not time or not ws:
-        raise ValueError("No hourly wind data returned for this query.")
-
-    df = pd.DataFrame({
-        "timestamp": pd.to_datetime(time, utc=True),
-        "wind_speed_mps": ws,
-        "wind_direction_deg": wd if wd else [np.nan] * len(ws),
-        "hub_height_m": height,
-    })
-
-    return df
-
-def add_data_type(df: pd.DataFrame) -> pd.DataFrame:
-    now_utc = datetime.now(timezone.utc)
-
-    # now = datetime.now(timezone.utc)
-    out = df.copy()
-
-    out["data_type"] = np.where(out["timestamp"] <= now_utc, "historical", "forecast")
-    
-    # st.write(out)
-    
-    return out
-
-# -----------------------------
-# Power curve + power output
-# -----------------------------
-def wind_to_power(
-    wind_speed_mps,
-    cut_in_mps=3.0,
-    rated_speed_mps=12.0,
-    cut_out_mps=25.0,
-    rated_power_mw=3.0
-):
-    """
-    Idealized wind turbine power curve:
-      - 0 below cut-in
-      - linear ramp cut-in -> rated speed
-      - rated power rated speed -> cut-out
-      - 0 above cut-out
-    """
-    ws = np.asarray(wind_speed_mps, dtype=float)
-    power = np.zeros_like(ws, dtype=float)
-
-    ramp = (ws >= cut_in_mps) & (ws < rated_speed_mps)
-    power[ramp] = rated_power_mw * (ws[ramp] - cut_in_mps) / (rated_speed_mps - cut_in_mps)
-
-    rated = (ws >= rated_speed_mps) & (ws <= cut_out_mps)
-    power[rated] = rated_power_mw
-
-    return power
-
-def add_power_output(df: pd.DataFrame, p: dict) -> pd.DataFrame:
-    out = df.copy()
-    out["power_mw"] = wind_to_power(
-        out["wind_speed_mps"].values,
-        cut_in_mps=p["cut_in_mps"],
-        rated_speed_mps=p["rated_speed_mps"],
-        cut_out_mps=p["cut_out_mps"],
-        rated_power_mw=p["rated_power_mw"],
-    )
-    # hourly data => energy per interval (MWh) is power(MW) * 1 hour
-    out["energy_mwh"] = out["power_mw"] * 1.0
-    return out
-
-# -----------------------------
-# Generation stats you requested
-# -----------------------------
-def compute_generation_stats(df: pd.DataFrame, p: dict) -> dict:
-    """
-    Stats computed on the full dataframe (historical + forecast).
-    You can compute separately by data_type if desired.
-    """
-    ws = df["wind_speed_mps"].to_numpy()
-    power = df["power_mw"].to_numpy()
-    energy = df["energy_mwh"].to_numpy()
-
-    below_cut_in = ws < p["cut_in_mps"]
-    above_cut_out = ws > p["cut_out_mps"]
-    operating = (~below_cut_in) & (~above_cut_out)
-
-    # % time (of available timestamps)
-    denom = max(len(ws), 1)
-    pct_below = 100.0 * below_cut_in.sum() / denom
-    pct_above = 100.0 * above_cut_out.sum() / denom
-    pct_operating = 100.0 * operating.sum() / denom
-
-    total_energy_mwh = float(np.nansum(energy))
-    mean_power_mw = float(np.nanmean(power))
-    p50_power_mw = float(np.nanpercentile(power, 50))
-    p90_power_mw = float(np.nanpercentile(power, 90))
-    max_power_mw = float(np.nanmax(power))
-
-    # capacity factor over the period (using mean power / rated power)
-    capacity_factor_pct = 100.0 * mean_power_mw / p["rated_power_mw"] if p["rated_power_mw"] > 0 else np.nan
-
-    return {
-        "pct_time_below_cut_in": pct_below,
-        "pct_time_above_cut_out": pct_above,
-        "pct_time_operating": pct_operating,
-        "total_energy_mwh": total_energy_mwh,
-        "mean_power_mw": mean_power_mw,
-        "p50_power_mw": p50_power_mw,
-        "p90_power_mw": p90_power_mw,
-        "max_power_mw": max_power_mw,
-        "capacity_factor_pct": capacity_factor_pct,
-    }
-
-# -----------------------------
-# Initialize state
+# Session state init
 # -----------------------------
 if "projects" not in st.session_state:
-    disk_projects = load_projects_from_disk()
-    # Ensure at least demo project exists
-    if "demo" not in disk_projects:
-        disk_projects["demo"] = DEFAULT_PROJECT
-        save_projects_to_disk(disk_projects)
-    st.session_state.projects = disk_projects
+    projects = load_projects_from_disk()
+    if "demo" not in projects:
+        projects["demo"] = DEFAULT_PROJECT
+        save_projects_to_disk(projects)
+    st.session_state.projects = projects
 
 if "selected_project_id" not in st.session_state:
     st.session_state.selected_project_id = "demo"
 
+if "df" not in st.session_state:
+    st.session_state.df = None
+
+if "last_query_key" not in st.session_state:
+    st.session_state.last_query_key = None
+
+if "query_params" not in st.session_state:
+    st.session_state.query_params = {}
+
 # -----------------------------
-# Sidebar: create/select project
+# Sidebar: project selection
 # -----------------------------
 st.sidebar.header("Projects")
 
 project_ids = list(st.session_state.projects.keys())
-selected = st.sidebar.selectbox(
+prev_project_id = st.session_state.selected_project_id
+
+selected_project_id = st.sidebar.selectbox(
     "Select a project",
     options=project_ids,
     index=project_ids.index(st.session_state.selected_project_id) if st.session_state.selected_project_id in project_ids else 0,
 )
-st.session_state.selected_project_id = selected
-# st.sidebar.subheader("Manage")
+st.session_state.selected_project_id = selected_project_id
+p = st.session_state.projects[selected_project_id]
 
-# if st.sidebar.button("Delete selected project", type="secondary"):
-#     pid = st.session_state.selected_project_id
+# If project changed, invalidate loaded df so tabs reflect the new project
+if selected_project_id != prev_project_id:
+    st.session_state.df = None
+    st.session_state.last_query_key = None
+    # optional: immediately rerun so UI reflects reset state
+    st.rerun()
 
-#     # Optional: prevent deleting the demo project
-#     if pid == "demo":
-#         st.sidebar.error("Can't delete the demo project.")
-#     else:
-#         # Delete
-#         st.session_state.projects.pop(pid, None)
-
-#         # Persist
-#         save_projects_to_disk(st.session_state.projects)
-
-#         # Pick a new selection safely
-#         remaining = list(st.session_state.projects.keys())
-#         st.session_state.selected_project_id = remaining[0] if remaining else "demo"
-
-#         # Clear cache (optional but recommended so UI updates immediately)
-#         st.cache_data.clear()
-
-#         st.rerun()
-
-
+# -----------------------------
+# Sidebar: create/delete projects
+# -----------------------------
 with st.sidebar.expander("Create a new project", expanded=False):
-    pricing_model = st.selectbox("Pricing model", PRICE_MODELS, index=0)
-    
-    with st.form("create_project_form"):
-        name = st.text_input("Project name", value="New Wind Project")
-        lat = st.number_input("Latitude", value=37.75, format="%.6f")
-        lon = st.number_input("Longitude", value=-122.45, format="%.6f")
+    # If you don't have PRICE_MODELS exported from windlib, use:
+    # PRICE_MODELS = ["Fixed price ($/MWh)", "Market price (gridstatus)"]
+    pricing_model_ui = st.selectbox("Pricing model", PRICE_MODELS, index=0)
 
-        # st.markdown("### Pricing")
+    with st.form("create_project_form", clear_on_submit=False):
+        name = st.text_input("Project name", value="New Wind Project")
+        lat = st.number_input("Latitude", value=float(p.get("latitude", 37.75)), format="%.6f")
+        lon = st.number_input("Longitude", value=float(p.get("longitude", -122.45)), format="%.6f")
 
         fixed_price = None
         iso_name = None
         lmp_market = None
         location_type = None
 
-        if pricing_model == "Fixed price ($/MWh)":
+        if pricing_model_ui.startswith("Fixed"):
             fixed_price = st.number_input("Fixed price ($/MWh)", value=50.0, step=1.0)
         else:
             iso_name = st.selectbox("ISO / Market", ISO_CHOICES, index=0)
             lmp_market = st.selectbox("LMP market", LMP_MARKETS, index=0)
-            # For an MVP, use hubs (much smaller than nodal/bus data)
             location_type = st.selectbox("Location type", ["Hub"], index=0)
 
-
-        supported_heights = [10, 80, 120, 180]
-        # hub_height_m = st.number_input("Hub height (m)", value=80, step=10)
-        hub_height_m = st.selectbox(
-            "Hub height (m)",
-            options=supported_heights,
-            index=supported_heights.index(80)  # default to 80
-    )        
-
+        st.info("Wind reference height is fixed at 100m.")
         cut_in = st.number_input("Cut-in speed (m/s)", value=3.0, step=0.1)
         rated_speed = st.number_input("Rated speed (m/s)", value=12.0, step=0.1)
         cut_out = st.number_input("Cut-out speed (m/s)", value=25.0, step=0.1)
         rated_power = st.number_input("Rated power (MW)", value=3.0, step=0.1)
 
         new_id = st.text_input("Project ID (unique)", value=f"proj_{len(project_ids)+1}")
-
         persist = st.checkbox("Save to projects.json (recommended)", value=True)
 
         submitted = st.form_submit_button("Create project")
@@ -417,76 +120,158 @@ with st.sidebar.expander("Create a new project", expanded=False):
                 "name": name,
                 "latitude": float(lat),
                 "longitude": float(lon),
-                "hub_height_m": int(hub_height_m),
+                "hub_height_m": 100,
                 "cut_in_mps": float(cut_in),
                 "rated_speed_mps": float(rated_speed),
                 "cut_out_mps": float(cut_out),
                 "rated_power_mw": float(rated_power),
-                "pricing_model": "fixed" if pricing_model.startswith("Fixed") else "market",
+                "pricing_model": "fixed" if pricing_model_ui.startswith("Fixed") else "market",
                 "fixed_price_usd_mwh": float(fixed_price) if fixed_price is not None else None,
                 "iso_name": iso_name,
                 "lmp_market": lmp_market,
                 "location_type": location_type,
-
             }
             if persist:
                 save_projects_to_disk(st.session_state.projects)
-            st.session_state.selected_project_id = new_id
-            st.success(f"Created project: {new_id}")
 
-with st.sidebar.expander("Delete a project"):
+            # select newly created project and invalidate df
+            st.session_state.selected_project_id = new_id
+            st.session_state.df = None
+            st.session_state.last_query_key = None
+            st.success(f"Created project: {new_id}")
+            st.rerun()
+
+with st.sidebar.expander("Delete a project", expanded=False):
     deletable_ids = [k for k in st.session_state.projects.keys() if k != "demo"]
-    delete_id = st.selectbox("Choose project to delete", options=deletable_ids)
-    if st.button("Delete this project", type="secondary"):
-        st.session_state.projects.pop(delete_id, None)
-        save_projects_to_disk(st.session_state.projects)
-        if st.session_state.selected_project_id == delete_id:
-            st.session_state.selected_project_id = "demo"
-        st.cache_data.clear()
-        st.rerun()
+    if not deletable_ids:
+        st.caption("No deletable projects yet.")
+    else:
+        delete_id = st.selectbox("Choose project to delete", options=deletable_ids)
+        if st.button("Delete this project", type="secondary"):
+            st.session_state.projects.pop(delete_id, None)
+            save_projects_to_disk(st.session_state.projects)
+
+            # If you deleted the selected project, revert to demo
+            if st.session_state.selected_project_id == delete_id:
+                st.session_state.selected_project_id = "demo"
+
+            st.session_state.df = None
+            st.session_state.last_query_key = None
+            st.cache_data.clear()
+            st.rerun()
 
 st.sidebar.divider()
 if st.sidebar.button("Clear cached data"):
     st.cache_data.clear()
+    st.session_state.df = None
+    st.session_state.last_query_key = None
     st.sidebar.success("Cache cleared.")
+    st.rerun()
 
 # -----------------------------
-# Main page: dashboard
+# Sidebar: query controls
 # -----------------------------
-p = st.session_state.projects[st.session_state.selected_project_id]
-st.title("Wind Energy Dashboard")
-st.caption("Historical vs forecast wind + estimated generation using an idealized turbine power curve.")
+st.sidebar.divider()
+st.sidebar.subheader("Query")
 
-# Date range controls
-with st.sidebar:
-    st.subheader("Data Range")
-    date_start = st.date_input("Start date", value=pd.to_datetime("2025-11-20").date())
-    date_end = st.date_input("End date", value=pd.to_datetime("2025-12-10").date())
+date_start = st.sidebar.date_input("Start date", value=pd.to_datetime("2024-01-01").date())
+date_end   = st.sidebar.date_input("End date",   value=pd.to_datetime("2024-01-07").date())
 
-# Calculate local time
-local_tz = get_tz_from_latlon(p["latitude"], p["longitude"])
+include_prices = st.sidebar.checkbox("Pull price data", value=True)
 
-now_utc = datetime.now(timezone.utc)
-now_local = now_utc.astimezone(local_tz)
+# Pricing model controls (only meaningful if include_prices)
+pricing_model = st.sidebar.selectbox(
+    "Pricing model",
+    options=["fixed", "market"],
+    index=0 if p.get("pricing_model", "fixed") == "fixed" else 1,
+    disabled=not include_prices
+)
 
-st.write(f"Local time: {now_local.strftime('%Y-%m-%d %H:%M %Z')}")
+fixed_price = None
+iso_name = None
+lmp_market = None
+location_type = None
 
+if include_prices:
+    if pricing_model == "fixed":
+        fixed_price = st.sidebar.number_input(
+            "Fixed price ($/MWh)",
+            value=float(p.get("fixed_price_usd_mwh", 50.0) or 50.0),
+            step=1.0
+        )
+    else:
+        iso_name = st.sidebar.selectbox("ISO", ISO_CHOICES, index=ISO_CHOICES.index(p.get("iso_name", "CAISO")))
+        lmp_market = st.sidebar.selectbox("LMP market", LMP_MARKETS, index=LMP_MARKETS.index(p.get("lmp_market", "DAY_AHEAD_HOURLY")))
+        location_type = st.sidebar.selectbox("Location type", ["Hub"], index=0)
 
-# Fetch + compute
-try:
-    with st.spinner("Loading wind data..."):
-        df = get_wind_data(p["latitude"], p["longitude"], str(date_start), str(date_end), p["hub_height_m"])
-        df = add_data_type(df)
+# Commit pricing edits back to project in-memory (and optionally persist later)
+p["pricing_model"] = pricing_model
+if fixed_price is not None:
+    p["fixed_price_usd_mwh"] = float(fixed_price)
+if iso_name is not None:
+    p["iso_name"] = iso_name
+if lmp_market is not None:
+    p["lmp_market"] = lmp_market
+if location_type is not None:
+    p["location_type"] = location_type
+
+do_query = st.sidebar.button("Requery", type="primary")
+
+# Query key: if anything important changes, df is considered stale
+query_key = (
+    st.session_state.selected_project_id,
+    str(date_start), str(date_end),
+    include_prices,
+    p.get("pricing_model"),
+    p.get("fixed_price_usd_mwh"),
+    p.get("iso_name"),
+    p.get("lmp_market"),
+    p.get("location_type"),
+    p.get("cut_in_mps"), p.get("rated_speed_mps"), p.get("cut_out_mps"), p.get("rated_power_mw"),
+)
+
+# Fetch only when user clicks Requery OR df missing OR query changed + user clicked Requery
+if do_query or (st.session_state.df is None):
+    local_tz = get_tz_from_latlon(p["latitude"], p["longitude"])
+
+    with st.spinner("Fetching wind (and optional price) data..."):
+        df = get_wind_data(p["latitude"], p["longitude"], str(date_start), str(date_end))
+        df = add_data_type(df, local_tz)
         df = add_power_output(df, p)
-        df = add_prices_and_revenue(df, p)
-except Exception as e:
-    st.error(f"Failed to load data: {e}")
+        df = add_prices_and_revenue(df, p, local_tz, include_prices=include_prices)
+
+    st.session_state.df = df
+    st.session_state.last_query_key = query_key
+    st.session_state.query_params = {
+        "date_start": date_start,
+        "date_end": date_end,
+        "include_prices": include_prices,
+        "local_tz": str(local_tz.key),
+    }
+
+# If query changed but user hasn't clicked requery yet, show a gentle indicator
+query_is_stale = (st.session_state.last_query_key is not None) and (st.session_state.last_query_key != query_key)
+
+# -----------------------------
+# Main page
+# -----------------------------
+st.title("Wind Energy Dashboard")
+st.caption("Use the sidebar controls to select a project and click **Requery** to refresh the data.")
+
+if query_is_stale:
+    st.warning("Sidebar settings changed. Click **Requery** to refresh results.")
+
+if st.session_state.df is None or len(st.session_state.df) == 0:
+    st.info("No data loaded yet. Select a range and click **Requery**.")
     st.stop()
-    
-# Update dataframe to include local time
-df["timestamp_local"] = df["timestamp"].dt.tz_convert(local_tz)
 
+df = st.session_state.df
+local_tz = get_tz_from_latlon(p["latitude"], p["longitude"])
+st.success(f"Loaded {len(df):,} rows | {df['timestamp'].min()} → {df['timestamp'].max()} ({local_tz.key})")
 
+# -----------------------------
+# Project Metadata
+# -----------------------------
 
 # Layout
 colA, colB = st.columns([1, 2]) # Modulates width of each column
@@ -505,6 +290,10 @@ with colA:
     # map_df = pd.DataFrame({"lat": [p["latitude"]], "lon": [p["longitude"]]})
     # st.map(map_df, zoom=6)
     dot_color = [255, 120, 0]
+
+# -----------------------------
+# Map
+# -----------------------------
 
 with colB:
     map_df = pd.DataFrame({
@@ -541,142 +330,186 @@ with colB:
     ))
 
 
-# with colB:
-st.subheader("Wind Speed (m/s)")
-fig_ws = px.line(
-    df,
-    x="timestamp_local",
-    y="wind_speed_mps",
-    color="data_type",
-    line_dash="data_type",
-    hover_data=["wind_direction_deg", "hub_height_m"],
-    labels={"wind_speed_mps": "Wind speed (m/s)", "timestamp": "Time"},
-)
-fig_ws.add_hline(y=p["cut_in_mps"], line_dash="dot", annotation_text="Cut-in")
-fig_ws.add_hline(y=p["cut_out_mps"], line_dash="dot", annotation_text="Cut-out")
-
-fig_ws.update_traces(
-    selector=dict(name="historical"),
-    line=dict(dash="solid")
+# -----------------------------
+# Tabs (Option 1)
+# -----------------------------
+tab_overview, tab_ts, tab_wind, tab_rev, tab_settings = st.tabs(
+    ["Overview", "Time Series", "Wind Analytics", "Revenue Analytics", "Settings"]
 )
 
-fig_ws.update_traces(
-    selector=dict(name="forecast"),
-    line=dict(dash="dot")
-)
+# ---------- Overview ----------
+with tab_overview:
+    # st.subheader("Project Summary")
+    # c1, c2, c3, c4 = st.columns(4)
+    # c1.metric("Project", p.get("name", "—"))
+    # c2.metric("Lat/Lon", f"{p['latitude']:.3f}, {p['longitude']:.3f}")
+    # c3.metric("Rated Power (MW)", f"{p.get('rated_power_mw', np.nan)}")
+    # c4.metric("Pricing", "Included" if st.session_state.query_params.get("include_prices", True) else "Not pulled")
 
-fig_ws.update_layout(
-    height=350
-)
+    # st.divider()
 
+    # A couple of quick KPIs (feel free to expand)
+    st.subheader("Quick KPIs (loaded range)")
+    if "energy_mwh" in df.columns:
+        total_energy = float(np.nansum(df["energy_mwh"]))
+        st.metric("Total Energy (MWh)", f"{total_energy:,.1f}")
 
-st.plotly_chart(fig_ws, use_container_width=True)
+    if "price_usd_mwh" in df.columns and df["price_usd_mwh"].notna().any():
+        st.metric("Avg Price ($/MWh)", f"{df['price_usd_mwh'].mean():.2f}")
 
-st.subheader("Estimated Power Output (MW)")
-fig_p = px.line(
-    df,
-    x="timestamp_local",
-    y="power_mw",
-    color="data_type",
-    line_dash="data_type",
-    labels={"power_mw": "Power (MW)", "timestamp": "Time"},
-)
+    if "revenue_usd" in df.columns and df["revenue_usd"].notna().any():
+        st.metric("Total Revenue ($)", f"{df['revenue_usd'].sum():,.0f}")
 
-fig_p.update_traces(
-    selector=dict(name="historical"),
-    line=dict(dash="solid")
-)
+    st.caption("Use the tabs above to drill into time series and analytics.")
 
-fig_p.update_traces(
-    selector=dict(name="forecast"),
-    line=dict(dash="dot")
-)
+# ---------- Time Series ----------
+with tab_ts:
+    # st.set_page_config(page_title="Time Series", layout="wide")
+    st.title("Time Series")
 
-fig_p.update_layout(
-    height=350
-)
+    if st.session_state.get("df") is None or len(st.session_state.df) == 0:
+        st.warning("No data loaded. Go to the main page and click **Requery**.")
+        st.stop()
 
+    df = st.session_state.df
 
-st.plotly_chart(fig_p, use_container_width=True)
+    st.subheader("Wind speed (m/s)")
+    st.plotly_chart(px.line(df, x="timestamp", y="wind_speed_mps", color="data_type"), use_container_width=True, key="ts_wind_speed")
 
+    st.subheader("Power (MW)")
+    st.plotly_chart(px.line(df, x="timestamp", y="power_mw", color="data_type"), use_container_width=True, key="ts_power")
 
-st.subheader("Energy Price Time Series ($/MWh)")
+    if df["price_usd_mwh"].notna().any():
+        st.subheader("Price ($/MWh)")
+        st.plotly_chart(px.line(df, x="timestamp", y="price_usd_mwh", color="data_type"), use_container_width=True, key="ts_price")
 
-fig_price = px.line(
-    df,
-    x="timestamp_local",
-    y="price_usd_mwh",
-    color="data_type",
-    line_dash="data_type",
-    labels={"price_usd_mwh": "Price ($/MWh)", "timestamp": "Time"},
-)
+        st.subheader("Revenue ($/hr)")
+        st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True)
+    else:
+        st.info("Price data is disabled. Enable **Pull price data** on the main page and click **Requery** to see price/revenue charts.")
 
-# Optional: match your dash styling
-fig_price.update_traces(selector=dict(name="historical"), line=dict(dash="solid"))
-fig_price.update_traces(selector=dict(name="forecast"), line=dict(dash="dot"))
+# ---------- Wind Analytics ----------
+with tab_wind:
+    # st.set_page_config(page_title="Wind Analytics", layout="wide")
+    st.title("Wind Resource Analytics")
 
-fig_price.update_layout(height=300)
+    if st.session_state.get("df") is None or len(st.session_state.df) == 0:
+        st.warning("No data loaded. Go to the main page and click **Requery**.")
+        st.stop()
 
-st.plotly_chart(fig_price, width="stretch")
+    df = st.session_state.df
+    p = st.session_state.projects[st.session_state.selected_project_id]
 
+    df_hist = df[df["data_type"] == "historical"].copy()
 
+    c1, c2 = st.columns(2)
 
-st.subheader("Revenue Time Series")
+    with c1:
+        st.subheader("Monthly capacity factor profile")
+        m = monthly_capacity_factor(df_hist, p["rated_power_mw"])
+        st.plotly_chart(px.line(m, x="month", y="capacity_factor"), use_container_width=True)
 
-fig_r = px.line(
-    df,
-    x="timestamp_local",
-    y="revenue_usd",
-    color="data_type",
-    line_dash="data_type",
-    labels={"revenue_usd": "Revenue ($/hr)", "timestamp": "Time"},
-)
-st.plotly_chart(fig_r, use_container_width=True)
+    with c2:
+        st.subheader("Seasonal capacity factor")
+        s = seasonal_capacity_factor(df_hist, p["rated_power_mw"])
+        st.plotly_chart(px.bar(s, x="season", y="capacity_factor"), use_container_width=True)
 
-    # st.subheader("Cumulative Revenue")
+    st.divider()
 
-    # df_sorted = df.sort_values("timestamp").copy()
-    # df_sorted["cum_revenue_usd"] = df_sorted["revenue_usd"].cumsum()
+    c3, c4 = st.columns(2)
 
-    # fig_cr = px.line(
-    #     df_sorted,
-    #     x="timestamp",
-    #     y="cum_revenue_usd",
-    #     color="data_type",
-    #     line_dash="data_type",
-    #     labels={"cum_revenue_usd": "Cumulative revenue ($)", "timestamp": "Time"},
-    # )
-    # st.plotly_chart(fig_cr, use_container_width=True)
+    with c3:
+        st.subheader("Exceedance curve")
+        ex = exceedance_curve(df_hist, threshold_mps=p["rated_speed_mps"])
+        fig = px.line(ex, x="wind_speed_mps", y="pct_hours_ge")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(f"% hours ≥ rated speed ({p['rated_speed_mps']} m/s): {ex.attrs.get('threshold_pct', float('nan')):.2f}%")
 
+    with c4:
+        st.subheader("Downtime risk by month")
+        d = downtime_risk_by_month(df_hist, p["cut_in_mps"], p["cut_out_mps"])
+        fig = px.line(d, x="month", y=["pct_below_cut_in", "pct_above_cut_out"])
+        st.plotly_chart(fig, use_container_width=True)
 
+    st.divider()
 
-# Stats section
-st.subheader("Generation Stats")
-stats_all = compute_generation_stats(df, p)
+    st.subheader("Interannual variability")
+    iav = interannual_variability(df_hist)
+    st.plotly_chart(px.bar(iav, x="year", y="total_energy"), use_container_width=True)
+    st.dataframe(iav, use_container_width=True)
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("% time below cut-in", f"{stats_all['pct_time_below_cut_in']:.1f}%")
-c2.metric("% time above cut-out", f"{stats_all['pct_time_above_cut_out']:.1f}%")
-c3.metric("% time operating", f"{stats_all['pct_time_operating']:.1f}%")
-c4.metric("Capacity factor (period)", f"{stats_all['capacity_factor_pct']:.1f}%")
-
-d1, d2, d3, d4 = st.columns(4)
-d1.metric("Total energy (MWh)", f"{stats_all['total_energy_mwh']:.1f}")
-d2.metric("Mean power (MW)", f"{stats_all['mean_power_mw']:.2f}")
-d3.metric("P50 power (MW)", f"{stats_all['p50_power_mw']:.2f}")
-d4.metric("P90 power (MW)", f"{stats_all['p90_power_mw']:.2f}")
-
-
-st.subheader("Revenue Stats")
-
-hist = df[df["data_type"] == "historical"].copy()
-fcst = df[df["data_type"] == "forecast"].copy()
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Avg price ($/MWh)", f"{hist['price_usd_mwh'].mean():.2f}" if len(hist) else "—")
-col2.metric("Historical revenue ($)", f"{hist['revenue_usd'].sum():,.0f}" if len(hist) else "—")
-col3.metric("Forecast revenue ($)", f"{fcst['revenue_usd'].sum():,.0f}" if len(fcst) else "—")
-col4.metric("Total revenue ($)", f"{df['revenue_usd'].sum():,.0f}")
+    st.subheader("P50/P90 Annual Energy (bootstrap over years)")
+    boot = annual_energy_bootstrap(df_hist, n_boot=2000)
+    st.write(f"Years available: **{boot['years']}**")
+    st.write(f"P50 AEP (MWh): **{boot['p50']:.0f}**")
+    st.write(f"P90 AEP (MWh): **{boot['p90']:.0f}**")
+    st.write(f"P10 AEP (MWh): **{boot['p10']:.0f}**")
+    st.dataframe(boot["annual_table"], use_container_width=True)
 
 
-st.caption("Note: Energy is computed from hourly power estimates (power * 1 hour). The power curve is idealized; add an OEM curve later for realism.")
+# ---------- Revenue Analytics ----------
+with tab_rev:
+    # st.set_page_config(page_title="Revenue Analytics", layout="wide")
+    st.title("Revenue & Market Analytics")
+
+    if st.session_state.get("df") is None or len(st.session_state.df) == 0:
+        st.warning("No data loaded. Go to the main page and click **Requery**.")
+        st.stop()
+
+    df = st.session_state.df
+    p = st.session_state.projects[st.session_state.selected_project_id]
+
+    if not df["price_usd_mwh"].notna().any():
+        st.info("Price data is disabled. Enable **Pull price data** on the main page and click **Requery**.")
+        st.stop()
+
+    df_hist = df[df["data_type"] == "historical"].copy()
+    df_hist["month"] = df_hist["timestamp"].dt.to_period("M").dt.to_timestamp()
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.subheader("Revenue time series")
+        st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True, key="ts_revenue")
+
+    with c2:
+        st.subheader("Price distribution by month")
+        box = px.box(df_hist, x="month", y="price_usd_mwh")
+        box.update_xaxes(tickformat="%Y-%m")
+        st.plotly_chart(box, use_container_width=True)
+
+    st.divider()
+
+    st.subheader("Monthly revenue")
+    monthly = df_hist.groupby("month", as_index=False)["revenue_usd"].sum()
+    st.plotly_chart(px.bar(monthly, x="month", y="revenue_usd"), use_container_width=True, key="rev_revenue_ts")
+    st.dataframe(monthly, use_container_width=True)
+
+
+# ---------- Settings ----------
+with tab_settings:
+    # st.set_page_config(page_title="Settings", layout="wide")
+    st.title("Project & Settings")
+
+    pid = st.session_state.selected_project_id
+    p = st.session_state.projects[pid]
+
+    st.subheader("Turbine parameters")
+    p["cut_in_mps"] = st.number_input("Cut-in (m/s)", value=float(p.get("cut_in_mps", 3.0)), step=0.1)
+    p["rated_speed_mps"] = st.number_input("Rated speed (m/s)", value=float(p.get("rated_speed_mps", 12.0)), step=0.1)
+    p["cut_out_mps"] = st.number_input("Cut-out (m/s)", value=float(p.get("cut_out_mps", 25.0)), step=0.1)
+    p["rated_power_mw"] = st.number_input("Rated power (MW)", value=float(p.get("rated_power_mw", 3.0)), step=0.1)
+
+    st.subheader("Pricing defaults (used when prices enabled)")
+    p["pricing_model"] = st.selectbox("Pricing model", ["fixed", "market"], index=0 if p.get("pricing_model")=="fixed" else 1)
+    if p["pricing_model"] == "fixed":
+        p["fixed_price_usd_mwh"] = st.number_input("Fixed price ($/MWh)", value=float(p.get("fixed_price_usd_mwh", 50.0)), step=1.0)
+    else:
+        p["iso_name"] = st.selectbox("ISO", ISO_CHOICES, index=ISO_CHOICES.index(p.get("iso_name","CAISO")))
+        p["lmp_market"] = st.selectbox("LMP market", LMP_MARKETS, index=LMP_MARKETS.index(p.get("lmp_market","DAY_AHEAD_HOURLY")))
+        p["location_type"] = st.selectbox("Location type", ["Hub"], index=0)
+
+    st.divider()
+    if st.button("Save projects.json"):
+        save_projects_to_disk(st.session_state.projects)
+        st.success("Saved.")

@@ -1,11 +1,29 @@
 {
+  "altamont_pass_wind": {
+    "cut_in_mps": 3.0,
+    "cut_out_mps": 25.0,
+    "fixed_price_usd_mwh": 50.0,
+    "hub_height_m": 100,
+    "iso_name": null,
+    "latitude": 37.744811,
+    "lmp_market": null,
+    "location_type": null,
+    "longitude": -121.657812,
+    "name": "Altamont Pass WInd",
+    "pricing_model": "fixed",
+    "project_id": "altamont_pass_wind",
+    "rated_power_mw": 3.0,
+    "rated_speed_mps": 12.0
+  },
   "demo": {
     "cut_in_mps": 3.0,
     "cut_out_mps": 25.0,
+    "fixed_price_usd_mwh": 50.0,
     "hub_height_m": 80,
     "latitude": 37.75,
     "longitude": -122.45,
     "name": "Demo Wind Project",
+    "pricing_model": "fixed",
     "project_id": "demo",
     "rated_power_mw": 3.0,
     "rated_speed_mps": 12.0
@@ -23,6 +41,22 @@
     "name": "SF Wind",
     "pricing_model": "market",
     "project_id": "proj_3",
+    "rated_power_mw": 3.0,
+    "rated_speed_mps": 12.0
+  },
+  "proj_4": {
+    "cut_in_mps": 3.0,
+    "cut_out_mps": 25.0,
+    "fixed_price_usd_mwh": null,
+    "hub_height_m": 100,
+    "iso_name": "CAISO",
+    "latitude": 37.75,
+    "lmp_market": "DAY_AHEAD_HOURLY",
+    "location_type": "Hub",
+    "longitude": -122.45,
+    "name": "SF Wind",
+    "pricing_model": "market",
+    "project_id": "proj_4",
     "rated_power_mw": 3.0,
     "rated_speed_mps": 12.0
   },
