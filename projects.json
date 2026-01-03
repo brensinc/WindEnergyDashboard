@@ -26,6 +26,22 @@
     "rated_power_mw": 3.0,
     "rated_speed_mps": 12.0
   },
+  "proj_4": {
+    "cut_in_mps": 3.0,
+    "cut_out_mps": 25.0,
+    "fixed_price_usd_mwh": null,
+    "hub_height_m": 100,
+    "iso_name": "CAISO",
+    "latitude": 37.75,
+    "lmp_market": "DAY_AHEAD_HOURLY",
+    "location_type": "Hub",
+    "longitude": -122.45,
+    "name": "SF Wind",
+    "pricing_model": "market",
+    "project_id": "proj_4",
+    "rated_power_mw": 3.0,
+    "rated_speed_mps": 12.0
+  },
   "sf_wind": {
     "cut_in_mps": 3.0,
     "cut_out_mps": 25.0,
