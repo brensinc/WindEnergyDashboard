@@ -1,4 +1,20 @@
 {
+  "ERCOT_project": {
+    "cut_in_mps": 3.0,
+    "cut_out_mps": 25.0,
+    "fixed_price_usd_mwh": null,
+    "hub_height_m": 100,
+    "iso_name": "Ercot",
+    "latitude": 32.491302,
+    "lmp_market": "DAY_AHEAD_HOURLY",
+    "location_type": "Hub",
+    "longitude": -96.935509,
+    "name": "ERCOT_project",
+    "pricing_model": "market",
+    "project_id": "ERCOT_project",
+    "rated_power_mw": 3.0,
+    "rated_speed_mps": 12.0
+  },
   "altamont_pass_wind": {
     "cut_in_mps": 3.0,
     "cut_out_mps": 25.0,
@@ -20,10 +36,13 @@
     "cut_out_mps": 25.0,
     "fixed_price_usd_mwh": 50.0,
     "hub_height_m": 80,
+    "iso_name": "Ercot",
     "latitude": 37.75,
+    "lmp_market": "DAY_AHEAD_HOURLY",
+    "location_type": "Hub",
     "longitude": -122.45,
     "name": "Demo Wind Project",
-    "pricing_model": "fixed",
+    "pricing_model": "market",
     "project_id": "demo",
     "rated_power_mw": 3.0,
     "rated_speed_mps": 12.0

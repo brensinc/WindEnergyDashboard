@@ -19,7 +19,7 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 REFERENCE_HUB_HEIGHT_M = 100
 
-ISO_CHOICES = ["CAISO", "ERCOT", "ISONE", "MISO", "NYISO", "PJM", "SPP"]
+ISO_CHOICES = ["CAISO", "Ercot", "ISONE", "MISO", "NYISO", "PJM", "SPP"]
 LMP_MARKETS = ["DAY_AHEAD_HOURLY", "REAL_TIME_HOURLY", "REAL_TIME_5_MIN"]
 
 PRICE_MODELS = ["Fixed", "Market"]
@@ -120,6 +120,21 @@ def _localize_safely(naive_dt, tz: ZoneInfo):
         return s.dt.tz_localize(tz, ambiguous="infer", nonexistent="shift_forward")
     except Exception:
         return s.dt.tz_localize(tz, ambiguous=True, nonexistent="shift_forward")
+
+def tz_mismatch_message(project_tz: ZoneInfo, iso_name: str):
+    iso_tz_name = ISO_TZ.get(iso_name)
+    if iso_tz_name is None:
+        return None
+
+    iso_tz = ZoneInfo(iso_tz_name)
+
+    if project_tz.key != iso_tz.key:
+        return {
+            "project_tz": project_tz.key,
+            "iso_tz": iso_tz.key,
+        }
+
+    return None
 
 # -----------------------------
 # Wind physics helpers
@@ -323,23 +338,60 @@ def get_market_prices_gridstatus(
 
     # Pull in monthly chunks to reduce rate-limit issues
     dfs = []
+    # for s, e in _date_chunks(start_date, end_date, freq="MS"):
+    #     kwargs = dict(base_kwargs)
+    #     kwargs["start"] = pd.Timestamp(s)
+    #     kwargs["end"] = pd.Timestamp(e) + pd.Timedelta(days=1)  # treat as exclusive
+    #     # df_chunk = iso.get_lmp(**kwargs)
+
+    #     if iso_name == "Ercot":
+    #         df_chunk = iso.get_spp(**kwargs)
+    #     else:
+    #         df_chunk = iso.get_lmp(**kwargs)
+
+    #     if df_chunk is not None and len(df_chunk):
+    #         dfs.append(df_chunk)
+
+    # if not dfs:
+    #     raise ValueError("No LMP data returned from gridstatus for this query.")
+
+    # df = pd.concat(dfs, ignore_index=True)
+
+    dfs = []
     for s, e in _date_chunks(start_date, end_date, freq="MS"):
-        kwargs = dict(base_kwargs)
-        kwargs["start"] = pd.Timestamp(s)
-        kwargs["end"] = pd.Timestamp(e) + pd.Timedelta(days=1)  # treat as exclusive
-        df_chunk = iso.get_lmp(**kwargs)
+        print("iso_name:", iso_name)
+        
+        if iso_name == "Ercot":
+            # ERCOT uses get_spp(date, end=...)
+            df_chunk = iso.get_spp(
+                date=pd.Timestamp(s),
+                end=pd.Timestamp(e),
+                market="DAY_AHEAD_HOURLY",
+                location_type="Trading Hub",   # or "Load Zone", "Resource Node"
+            )
+        else:
+            df_chunk = iso.get_lmp(
+                start=pd.Timestamp(s),
+                end=pd.Timestamp(e) + pd.Timedelta(days=1),  # exclusive end for LMP path
+                market=market,
+                location_type=location_type,
+            )
+
         if df_chunk is not None and len(df_chunk):
             dfs.append(df_chunk)
 
     if not dfs:
-        raise ValueError("No LMP data returned from gridstatus for this query.")
+        raise ValueError(f"No price data returned for {iso_name} between {start_date} and {end_date}")
 
     df = pd.concat(dfs, ignore_index=True)
+
 
     time_col = next((c for c in ["Time", "time", "timestamp", "Datetime", "DATETIME"] if c in df.columns), None)
     if time_col is None:
         raise ValueError(f"Could not find a time column in LMP data. Columns: {list(df.columns)}")
-    price_col = next((c for c in ["LMP", "lmp", "price", "Price", "LBMP"] if c in df.columns), None)
+    # price_col = next((c for c in ["LMP", "lmp", "price", "Price", "LBMP"] if c in df.columns), None)
+    price_col = next((c for c in ["LMP", "lmp", "price", "Price", "LBMP", "SPP"] if c in df.columns), None)
+
     if price_col is None:
         raise ValueError(f"Could not find a price column in LMP data. Columns: {list(df.columns)}")
 

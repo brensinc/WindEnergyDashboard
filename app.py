@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import pydeck as pdk
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 from windlib import (
@@ -25,7 +27,8 @@ from windlib import (
     interannual_variability,
     save_projects_to_disk, 
     ISO_CHOICES, 
-    LMP_MARKETS
+    LMP_MARKETS,
+    tz_mismatch_message
 )
 
 st.set_page_config(page_title="Wind Energy Dashboard", layout="wide")
@@ -269,6 +272,28 @@ df = st.session_state.df
 local_tz = get_tz_from_latlon(p["latitude"], p["longitude"])
 st.success(f"Loaded {len(df):,} rows | {df['timestamp'].min()} → {df['timestamp'].max()} ({local_tz.key})")
 
+
+tz_info = tz_mismatch_message(
+    project_tz=local_tz,
+    iso_name=p.get("iso_name"),
+)
+
+if tz_info and st.session_state.query_params.get("include_prices", False):
+    st.info(
+        f"""
+**Timezone notice**
+
+Your wind site is in **{tz_info['project_tz']}**,  
+but market prices for **{p['iso_name']}** are published in **{tz_info['iso_tz']}**.
+
+As a result:
+- Market prices may be misaligned from generation data
+
+All prices are shown in the **project's local timezone** for consistency.
+""",
+        icon="⏰",
+    )
+
 # -----------------------------
 # Project Metadata
 # -----------------------------
@@ -376,17 +401,48 @@ with tab_ts:
     st.subheader("Wind speed (m/s)")
     st.plotly_chart(px.line(df, x="timestamp", y="wind_speed_mps", color="data_type"), use_container_width=True, key="ts_wind_speed")
 
-    st.subheader("Power (MW)")
-    st.plotly_chart(px.line(df, x="timestamp", y="power_mw", color="data_type"), use_container_width=True, key="ts_power")
+    st.subheader("Power (MW) and Price ($/MWh)")
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=df["timestamp"],
+            y=df["power_mw"],
+            name=f"Power (MW)",
+            mode="lines",
+        ),
+        secondary_y=False,
+    )
 
     if df["price_usd_mwh"].notna().any():
-        st.subheader("Price ($/MWh)")
-        st.plotly_chart(px.line(df, x="timestamp", y="price_usd_mwh", color="data_type"), use_container_width=True, key="ts_price")
-
-        st.subheader("Revenue ($/hr)")
-        st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True)
+        for dtype, dfg in df.groupby("data_type"):
+            fig.add_trace(
+                go.Scatter(
+                    x=dfg["timestamp"],
+                    y=dfg["price_usd_mwh"],
+                    name=f"Price ({dtype})",
+                    mode="lines",
+                    line=dict(dash="dot"),
+                ),
+                secondary_y=True,
+            )
     else:
         st.info("Price data is disabled. Enable **Pull price data** on the main page and click **Requery** to see price/revenue charts.")
+    
+    # ---- Axis labels ----
+    fig.update_yaxes(title_text="Power (MW)", secondary_y=False)
+    fig.update_yaxes(title_text="Price ($/MWh)", secondary_y=True)
+
+
+    fig.update_layout(
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=40, r=40, t=40, b=40),
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(fig, use_container_width=True, key="ts_power_price")
+
+    st.subheader("Revenue ($/hr)")
+    st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True)
 
 # ---------- Wind Analytics ----------
 with tab_wind:
