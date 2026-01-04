@@ -2,10 +2,24 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import pydeck as pdk
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Folium imports for interactive maps
+from streamlit_folium import st_folium
+from map_components import (
+    create_base_map,
+    add_project_markers,
+    add_heatmap_from_cache,
+    add_layer_control,
+    get_click_coordinates,
+    add_legend_to_map,
+    add_single_marker
+)
+from heatmap_utils import (
+    load_heatmap_cache,
+    get_revenue_stats,
+)
 
 from windlib import (
     load_projects_from_disk,
@@ -55,6 +69,22 @@ if "last_query_key" not in st.session_state:
 if "query_params" not in st.session_state:
     st.session_state.query_params = {}
 
+# Map interaction session state
+if "clicked_coords" not in st.session_state:
+    st.session_state.clicked_coords = None
+
+if "show_location_confirm" not in st.session_state:
+    st.session_state.show_location_confirm = False
+
+if "confirmed_lat" not in st.session_state:
+    st.session_state.confirmed_lat = None
+
+if "confirmed_lng" not in st.session_state:
+    st.session_state.confirmed_lng = None
+
+if "show_heatmap" not in st.session_state:
+    st.session_state.show_heatmap = False
+
 # -----------------------------
 # Sidebar: project selection
 # -----------------------------
@@ -88,8 +118,13 @@ with st.sidebar.expander("Create a new project", expanded=False):
 
     with st.form("create_project_form", clear_on_submit=False):
         name = st.text_input("Project name", value="New Wind Project")
-        lat = st.number_input("Latitude", value=float(p.get("latitude", 37.75)), format="%.6f")
-        lon = st.number_input("Longitude", value=float(p.get("longitude", -122.45)), format="%.6f")
+        
+        # Use confirmed coordinates from map click if available, otherwise use defaults
+        default_lat = st.session_state.confirmed_lat if st.session_state.confirmed_lat is not None else p.get("latitude", 37.75)
+        default_lng = st.session_state.confirmed_lng if st.session_state.confirmed_lng is not None else p.get("longitude", -122.45)
+        
+        lat = st.number_input("Latitude", value=float(default_lat), format="%.4f")
+        lon = st.number_input("Longitude", value=float(default_lng), format="%.4f")
 
         fixed_price = None
         iso_name = None
@@ -170,6 +205,25 @@ if st.sidebar.button("Clear cached data"):
     st.session_state.last_query_key = None
     st.sidebar.success("Cache cleared.")
     st.rerun()
+
+# -----------------------------
+# Sidebar: Heatmap controls
+# -----------------------------
+st.sidebar.divider()
+st.sidebar.subheader("Revenue Heatmap")
+
+show_heatmap = st.sidebar.checkbox(
+    "Show Annual Revenue Heatmap",
+    value=st.session_state.show_heatmap,
+    help="Displays estimated annual revenue across the US (based on 2024 data, $50/MWh fixed price)"
+)
+st.session_state.show_heatmap = show_heatmap
+
+if show_heatmap:
+    st.sidebar.caption(
+        "Heatmap shows estimated annual revenue at $50/MWh fixed price. "
+        "Create a project for precise calculations."
+    )
 
 # -----------------------------
 # Sidebar: query controls
@@ -317,42 +371,76 @@ with colA:
     dot_color = [255, 120, 0]
 
 # -----------------------------
-# Map
+# Map (Folium with click-to-select and heatmap support)
 # -----------------------------
 
 with colB:
-    map_df = pd.DataFrame({
-        "lat": [p["latitude"]],
-        "lon": [p["longitude"]],
-        "label": [f"{p['name']}\n({p['latitude']:.4f}, {p['longitude']:.4f})"],
-    })
+    # Create base map centered on US
+    m = create_base_map(center=[39.8283, -98.5795], zoom=4)
+    
+    # Add all project markers
+    add_project_markers(m, st.session_state.projects, st.session_state.selected_project_id)
+        
+    add_project_markers(m, st.session_state.projects, st.session_state.selected_project_id)
+    # Add marker for last clicked location
+    if st.session_state.clicked_coords:
+        lat, lng = st.session_state.clicked_coords
+        add_single_marker(m, lat, lng, name="Selected Location", color='blue')
 
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=map_df,
-        get_position="[lon, lat]",
-        get_radius=2000,   # adjust for zoom/scale
-        pickable=True, 
-        get_fill_color=dot_color,
-
+    # Add heatmap layer if enabled
+    if st.session_state.show_heatmap:
+        heatmap_data = load_heatmap_cache(year=2024)
+        if heatmap_data is not None:
+            add_heatmap_from_cache(m, heatmap_data, name="Annual Revenue (2024)")
+            # Add legend
+            stats = get_revenue_stats(heatmap_data)
+            add_legend_to_map(m, stats["min"], stats["max"])
+        else:
+            st.warning("Heatmap data not found. Run `python generate_heatmap.py` to generate it.")
+    
+    # Add layer control for toggling
+    add_layer_control(m)
+    
+    # Render map and capture click events
+    map_data = st_folium(
+        m,
+        height=400,
+        width=None,  # Use full container width
+        key="main_map",
+        returned_objects=["last_clicked"],
     )
-
-    tooltip = {
-        "text": "{label}"
-    }
-
-    view_state = pdk.ViewState(
-        latitude=p["latitude"],
-        longitude=p["longitude"],
-        zoom=7,
-    )
-
-    st.pydeck_chart(pdk.Deck(
-        layers=[layer],
-        initial_view_state=view_state,
-        tooltip=tooltip,
-        map_style='light'
-    ))
+    
+    # Handle map clicks
+    clicked = get_click_coordinates(map_data)
+    if clicked is not None:
+        new_lat, new_lng = clicked
+        # Only update if this is a new click (different from previous)
+        if st.session_state.clicked_coords != (new_lat, new_lng):
+            st.session_state.clicked_coords = (new_lat, new_lng)
+            st.session_state.show_location_confirm = True
+    
+    # Floating confirmation overlay for location selection
+    if st.session_state.show_location_confirm and st.session_state.clicked_coords:
+        lat, lng = st.session_state.clicked_coords
+        
+        st.info(f"**Selected Location:** {lat:.4f}, {lng:.4f}")
+        
+        col_confirm, col_cancel = st.columns(2)
+        
+        with col_confirm:
+            if st.button("Use This Location", type="primary", key="confirm_location"):
+                st.session_state.confirmed_lat = lat
+                st.session_state.confirmed_lng = lng
+                st.session_state.show_location_confirm = False
+                st.session_state.clicked_coords = None
+                st.success(f"Location set! Open 'Create a new project' in sidebar to use these coordinates.")
+                st.rerun()
+        
+        with col_cancel:
+            if st.button("Cancel", key="cancel_location"):
+                st.session_state.clicked_coords = None
+                st.session_state.show_location_confirm = False
+                st.rerun()
 
 
 # -----------------------------

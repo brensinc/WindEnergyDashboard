@@ -1,0 +1,16 @@
+# Data files (regenerated locally)
+data/*.joblib
+data/boundaries/*.zip
+data/*.zip
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+# IDE
+.vscode/
+.idea/
+*.swp
+# OS
+.DS_Store
+Thumbs.db
