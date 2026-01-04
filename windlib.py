@@ -367,9 +367,6 @@ def get_market_prices_gridstatus(
 
 def add_prices_and_revenue(df: pd.DataFrame, project: dict, local_tz: ZoneInfo, include_prices: bool) -> pd.DataFrame:
     out = df.copy()
-
-    
-
     out["timestamp"] = _ensure_tzaware(out["timestamp"], local_tz)
 
     # If user doesn't want prices, ensure columns exist and exit
