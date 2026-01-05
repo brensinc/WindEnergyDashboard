@@ -340,7 +340,8 @@ def create_heatmap_data_structure(
     price_usd_mwh: float,
     sample_points: List[Tuple[float, float]],
     us_mask: np.ndarray = None,
-    offshore_buffer_km: float = OFFSHORE_BUFFER_KM
+    offshore_buffer_km: float = OFFSHORE_BUFFER_KM,
+    iso_prices: Dict[str, float] = None
 ) -> Dict:
     """
     Create the complete heatmap data structure for caching.
@@ -352,10 +353,11 @@ def create_heatmap_data_structure(
         availability_mask: Boolean mask for data availability
         year: Year of the data
         turbine_params: Turbine parameters used
-        price_usd_mwh: Fixed price used for calculations
+        price_usd_mwh: Average fixed price used for calculations
         sample_points: Original sample points used
         us_mask: Boolean mask for US boundary (including offshore buffer)
         offshore_buffer_km: Buffer distance in km for offshore areas
+        iso_prices: Dictionary mapping ISO names to regional prices
         
     Returns:
         Dictionary containing all heatmap data
@@ -382,6 +384,7 @@ def create_heatmap_data_structure(
         "offshore_buffer_km": offshore_buffer_km,
         "turbine_params": turbine_params,
         "price_usd_mwh": price_usd_mwh,
+        "iso_prices": iso_prices if iso_prices else {},
         "sample_points": sample_points,
         "n_sample_points": len(sample_points),
         "grid_shape": lat_grid.shape,

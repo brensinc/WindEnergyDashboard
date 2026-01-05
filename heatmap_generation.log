@@ -1,0 +1,157 @@
+
+Loading ISO annual prices...
+  ISO prices: {'CAISO': 32.5, 'Ercot': 28.75, 'ISONE': 45.2, 'MISO': 25.1, 'NYISO': 52.3, 'PJM': 38.9}
+
+============================================================
+WIND ENERGY HEATMAP GENERATOR (ISO Regional Prices)
+============================================================
+Year: 2024
+Sample density: 25x25 = 625 points
+Turbine: 2.5 MW
+Pricing: ISO-specific regional prices
+============================================================
+
+Creating sample grid...
+Generated 625 sample points
+
+Fetching wind data and calculating revenue...
+(This will take some time due to API rate limits)
+
+[1/625] (0.2%) ETA: calculating...
+  (24.50, -125.00): No pricing available (too_far)
+[2/625] (0.3%) ETA: 30.3 min
+  (24.50, -122.54): No pricing available (too_far)
+[3/625] (0.5%) ETA: 30.7 min
+  (24.50, -120.08): No pricing available (too_far)
+[4/625] (0.6%) ETA: 30.6 min
+  (24.50, -117.62): No pricing available (too_far)
+[5/625] (0.8%) ETA: 30.9 min
+  (24.50, -115.17): No pricing available (too_far)
+[6/625] (1.0%) ETA: 30.9 min
+  (24.50, -112.71): No pricing available (too_far)
+[7/625] (1.1%) ETA: 31.1 min
+  (24.50, -110.25): No pricing available (too_far)
+[8/625] (1.3%) ETA: 31.1 min
+  (24.50, -107.79): No pricing available (too_far)
+[9/625] (1.4%) ETA: 31.3 min
+  (24.50, -105.33) [FALLBACK: Ercot @ 615km]: 8784 hours, CF=13.25%, $28.75/MWh, Revenue=$83,682
+[10/625] (1.6%) ETA: 31.2 min
+  (24.50, -102.88) [FALLBACK: Ercot @ 422km]: 8784 hours, CF=27.28%, $28.75/MWh, Revenue=$172,255
+[11/625] (1.8%) ETA: 31.3 min
+  (24.50, -100.42) [FALLBACK: Ercot @ 229km]: 8784 hours, CF=21.62%, $28.75/MWh, Revenue=$136,489
+[12/625] (1.9%) ETA: 31.3 min
+  (24.50, -97.96) [OFFSHORE near Ercot +15%]: 8784 hours, CF=33.13%, $33.06/MWh, Revenue=$240,543
+[13/625] (2.1%) ETA: 31.2 min
+  (24.50, -95.50) [OFFSHORE near Ercot +15%]: 8784 hours, CF=45.18%, $33.06/MWh, Revenue=$328,015
+[14/625] (2.2%) ETA: 31.2 min
+  (24.50, -93.04) [OFFSHORE near Ercot +15%]: 8784 hours, CF=47.35%, $33.06/MWh, Revenue=$343,791
+[15/625] (2.4%) ETA: 31.1 min
+  (24.50, -90.58) [OFFSHORE near Ercot +15%]: 8784 hours, CF=48.26%, $33.06/MWh, Revenue=$350,392
+[16/625] (2.6%) ETA: 31.0 min
+  (24.50, -88.12) [OFFSHORE near Ercot +15%]: 8784 hours, CF=46.20%, $33.06/MWh, Revenue=$335,436
+[17/625] (2.7%) ETA: 31.2 min
+  (24.50, -85.67): No pricing available (too_far)
+[18/625] (2.9%) ETA: 31.1 min
+  (24.50, -83.21): No pricing available (too_far)
+[19/625] (3.0%) ETA: 31.1 min
+  (24.50, -80.75): No pricing available (too_far)
+[20/625] (3.2%) ETA: 31.1 min
+  (24.50, -78.29): No pricing available (too_far)
+[21/625] (3.4%) ETA: 31.0 min
+  (24.50, -75.83): No pricing available (too_far)
+[22/625] (3.5%) ETA: 30.9 min
+  (24.50, -73.38): No pricing available (too_far)
+[23/625] (3.7%) ETA: 30.9 min
+  (24.50, -70.92): No pricing available (too_far)
+[24/625] (3.8%) ETA: 30.8 min
+  (24.50, -68.46): No pricing available (too_far)
+[25/625] (4.0%) ETA: 30.8 min
+  (24.50, -66.00): No pricing available (too_far)
+[26/625] (4.2%) ETA: 30.7 min
+  (25.54, -125.00): No pricing available (too_far)
+[27/625] (4.3%) ETA: 30.6 min
+  (25.54, -122.54): No pricing available (too_far)
+[28/625] (4.5%) ETA: 30.5 min
+  (25.54, -120.08): No pricing available (too_far)
+[29/625] (4.6%) ETA: 30.5 min
+  (25.54, -117.62): No pricing available (too_far)
+[30/625] (4.8%) ETA: 30.4 min
+  (25.54, -115.17): No pricing available (too_far)
+[31/625] (5.0%) ETA: 30.4 min
+  (25.54, -112.71): No pricing available (too_far)
+[32/625] (5.1%) ETA: 30.4 min
+  (25.54, -110.25): No pricing available (too_far)
+[33/625] (5.3%) ETA: 30.3 min
+  (25.54, -107.79) [FALLBACK: Ercot @ 726km]: 8784 hours, CF=4.78%, $28.75/MWh, Revenue=$30,166
+[34/625] (5.4%) ETA: 30.2 min
+  (25.54, -105.33) [FALLBACK: Ercot @ 533km]: 8784 hours, CF=7.94%, $28.75/MWh, Revenue=$50,141
+[35/625] (5.6%) ETA: 30.2 min
+  (25.54, -102.88) [FALLBACK: Ercot @ 340km]: 8784 hours, CF=29.81%, $28.75/MWh, Revenue=$188,193
+[36/625] (5.8%) ETA: 30.1 min
+  (25.54, -100.42) [FALLBACK: Ercot @ 147km]: 8784 hours, CF=2.51%, $28.75/MWh, Revenue=$15,869
+[37/625] (5.9%) ETA: 30.0 min
+  (25.54, -97.96) [OFFSHORE near Ercot +15%]: 8783 hours, CF=37.75%, $33.06/MWh, Revenue=$274,073
+[38/625] (6.1%) ETA: 29.9 min
+  (25.54, -95.50) [OFFSHORE near Ercot +15%]: 8784 hours, CF=46.53%, $33.06/MWh, Revenue=$337,804
+[39/625] (6.2%) ETA: 29.9 min
+  (25.54, -93.04) [OFFSHORE near Ercot +15%]: 8784 hours, CF=47.15%, $33.06/MWh, Revenue=$342,316
+[40/625] (6.4%) ETA: 29.8 min
+  (25.54, -90.58) [OFFSHORE near Ercot +15%]: 8784 hours, CF=47.08%, $33.06/MWh, Revenue=$341,792
+[41/625] (6.6%) ETA: 29.8 min
+  (25.54, -88.12) [OFFSHORE near Ercot +15%]: 8784 hours, CF=44.54%, $33.06/MWh, Revenue=$323,356
+[42/625] (6.7%) ETA: 29.7 min
+  (25.54, -85.67): No pricing available (too_far)
+[43/625] (6.9%) ETA: 29.6 min
+  (25.54, -83.21): No pricing available (too_far)
+[44/625] (7.0%) ETA: 29.6 min
+  (25.54, -80.75): No pricing available (too_far)
+[45/625] (7.2%) ETA: 29.5 min
+  (25.54, -78.29): No pricing available (too_far)
+[46/625] (7.4%) ETA: 29.4 min
+  (25.54, -75.83): No pricing available (too_far)
+[47/625] (7.5%) ETA: 29.3 min
+  (25.54, -73.38): No pricing available (too_far)
+[48/625] (7.7%) ETA: 29.3 min
+  (25.54, -70.92): No pricing available (too_far)
+[49/625] (7.8%) ETA: 29.2 min
+  (25.54, -68.46): No pricing available (too_far)
+[50/625] (8.0%) ETA: 29.2 min
+  (25.54, -66.00): No pricing available (too_far)
+[51/625] (8.2%) ETA: 29.1 min
+  (26.58, -125.00): No pricing available (too_far)
+[52/625] (8.3%) ETA: 29.0 min
+  (26.58, -122.54): No pricing available (too_far)
+[53/625] (8.5%) ETA: 29.0 min
+  (26.58, -120.08) [FALLBACK: CAISO @ 717km]: 8784 hours, CF=38.59%, $32.50/MWh, Revenue=$275,415
+[54/625] (8.6%) ETA: 28.9 min
+  (26.58, -117.62) [FALLBACK: CAISO @ 657km]: 8784 hours, CF=40.70%, $32.50/MWh, Revenue=$290,494
+[55/625] (8.8%) ETA: 28.8 min
+  (26.58, -115.17) [FALLBACK: CAISO @ 673km]: 8784 hours, CF=52.34%, $32.50/MWh, Revenue=$373,530
+[56/625] (9.0%) ETA: 28.8 min
+  (26.58, -112.71): No pricing available (too_far)
+[57/625] (9.1%) ETA: 28.8 min
+  (26.58, -110.25): No pricing available (too_far)
+[58/625] (9.3%) ETA: 28.7 min
+  (26.58, -107.79) [FALLBACK: Ercot @ 653km]: 8784 hours, CF=3.53%, $28.75/MWh, Revenue=$22,302
+[59/625] (9.4%) ETA: 28.7 min
+  (26.58, -105.33) [FALLBACK: Ercot @ 451km]: 8784 hours, CF=25.36%, $28.75/MWh, Revenue=$160,119
+[60/625] (9.6%) ETA: 28.6 min
+  (26.58, -102.88) [FALLBACK: Ercot @ 258km]: 8784 hours, CF=15.96%, $28.75/MWh, Revenue=$100,785
+[61/625] (9.8%) ETA: 28.5 min
+  (26.58, -100.42) [FALLBACK: Ercot @ 65km]: 8784 hours, CF=15.35%, $28.75/MWh, Revenue=$96,924
+[62/625] (9.9%) ETA: 28.5 min
+  (26.58, -97.96) [Ercot]: 8783 hours, CF=35.07%, $28.75/MWh, Revenue=$221,389
+[63/625] (10.1%) ETA: 28.4 min
+  (26.58, -95.50) [Ercot]: 8784 hours, CF=47.71%, $28.75/MWh, Revenue=$301,200
+[64/625] (10.2%) ETA: 28.4 min
+  (26.58, -93.04) [OFFSHORE near Ercot +15%]: 8784 hours, CF=48.14%, $33.06/MWh, Revenue=$349,534
+[65/625] (10.4%) ETA: 28.3 min
+  (26.58, -90.58) [OFFSHORE near Ercot +15%]: 8784 hours, CF=46.30%, $33.06/MWh, Revenue=$336,152
+[66/625] (10.6%) ETA: 28.3 min
+  (26.58, -88.12) [OFFSHORE near Ercot +15%]: 8784 hours, CF=43.12%, $33.06/MWh, Revenue=$313,085
+[67/625] (10.7%) ETA: 28.2 min
+  (26.58, -85.67): No pricing available (too_far)
+[68/625] (10.9%) ETA: 28.2 min
+  (26.58, -83.21): No pricing available (too_far)
+[69/625] (11.0%) ETA: 28.1 min
+  (26.58, -80.75): No pricing available (too_far)

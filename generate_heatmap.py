@@ -50,6 +50,9 @@ from windlib import (
     add_data_type,
     add_power_output,
     get_tz_from_latlon,
+    get_iso_for_location,
+    get_all_iso_annual_prices,
+    get_price_for_location,
 )
 
 
@@ -58,22 +61,22 @@ def calculate_annual_revenue_for_point(
     lon: float,
     year: int,
     turbine_params: Dict,
-    price_usd_mwh: float,
+    iso_prices: Dict[str, float],
     verbose: bool = False
 ) -> float:
     """
-    Calculate annual revenue for a single location.
+    Calculate annual revenue for a single location using ISO-specific prices.
     
     Args:
         lat: Latitude
         lon: Longitude
         year: Year of data
         turbine_params: Turbine parameters (cut_in_mps, rated_speed_mps, etc.)
-        price_usd_mwh: Fixed price per MWh
+        iso_prices: Dictionary mapping ISO names to annual average prices ($/MWh)
         verbose: Print progress info
         
     Returns:
-        Annual revenue in USD, or 0 if data unavailable
+        Annual revenue in USD, or 0 if data unavailable / outside ISOs
     """
     try:
         # Fetch wind data for the entire year
@@ -105,16 +108,40 @@ def calculate_annual_revenue_for_point(
         df_hist = add_power_output(df_hist, turbine_params)
         
         # Calculate energy (power_mw * 1 hour = energy_mwh)
-        # This is already done in add_power_output
+        total_energy_mwh = df_hist["energy_mwh"].sum()
+        
+        # Get price using hybrid ISO/offshore/fallback logic
+        price_usd_mwh, pricing_type, pricing_meta = get_price_for_location(lat, lon, iso_prices)
+        
+        if pricing_type == "none":
+            if verbose:
+                reason = pricing_meta.get("reason", "unknown")
+                print(f"  ({lat:.2f}, {lon:.2f}): No pricing available ({reason})")
+            return 0.0
         
         # Calculate revenue
-        total_energy_mwh = df_hist["energy_mwh"].sum()
         annual_revenue = total_energy_mwh * price_usd_mwh
         
         if verbose:
             hours = len(df_hist)
             capacity_factor = df_hist["power_mw"].mean() / turbine_params["rated_power_mw"]
-            print(f"  ({lat:.2f}, {lon:.2f}): {hours} hours, CF={capacity_factor:.2%}, Revenue=${annual_revenue:,.0f}")
+            
+            # Build descriptive label for pricing type
+            if pricing_type == "iso":
+                iso_label = pricing_meta.get("iso_name", "?")
+                price_label = f"[{iso_label}]"
+            elif pricing_type == "offshore":
+                iso_label = pricing_meta.get("nearest_iso", "?")
+                premium = pricing_meta.get("premium_pct", 0)
+                price_label = f"[OFFSHORE near {iso_label} +{premium:.0f}%]"
+            elif pricing_type == "fallback":
+                iso_label = pricing_meta.get("nearest_iso", "?")
+                dist_km = pricing_meta.get("distance_km", 0)
+                price_label = f"[FALLBACK: {iso_label} @ {dist_km:.0f}km]"
+            else:
+                price_label = "[?]"
+            
+            print(f"  ({lat:.2f}, {lon:.2f}) {price_label}: {hours} hours, CF={capacity_factor:.2%}, ${price_usd_mwh:.2f}/MWh, Revenue=${annual_revenue:,.0f}")
         
         return annual_revenue
         
@@ -128,17 +155,17 @@ def generate_heatmap_data(
     year: int = 2024,
     density: int = 15,
     turbine_params: Dict = None,
-    price_usd_mwh: float = DEFAULT_PRICE_USD_MWH,
+    iso_prices: Dict[str, float] = None,
     verbose: bool = False
 ) -> Dict:
     """
-    Generate complete heatmap data for the continental US.
+    Generate complete heatmap data for the continental US using ISO-specific prices.
     
     Args:
         year: Year of data to use
         density: Number of sample points per axis
         turbine_params: Turbine parameters (uses industry standard if None)
-        price_usd_mwh: Fixed price per MWh
+        iso_prices: Dictionary mapping ISO names to prices ($/MWh). If None, loads from cache/API.
         verbose: Print progress information
         
     Returns:
@@ -147,13 +174,18 @@ def generate_heatmap_data(
     if turbine_params is None:
         turbine_params = INDUSTRY_STANDARD_TURBINE.copy()
     
+    if iso_prices is None:
+        print("\nLoading ISO annual prices...")
+        iso_prices = get_all_iso_annual_prices(year=year, use_cache=True, force_refresh=False)
+        print(f"  ISO prices: {iso_prices}")
+    
     print(f"\n{'='*60}")
-    print(f"WIND ENERGY HEATMAP GENERATOR")
+    print(f"WIND ENERGY HEATMAP GENERATOR (ISO Regional Prices)")
     print(f"{'='*60}")
     print(f"Year: {year}")
     print(f"Sample density: {density}x{density} = {density**2} points")
     print(f"Turbine: {turbine_params['rated_power_mw']} MW")
-    print(f"Price: ${price_usd_mwh}/MWh")
+    print(f"Pricing: ISO-specific regional prices")
     print(f"{'='*60}\n")
     
     # Create sample grid
@@ -183,7 +215,7 @@ def generate_heatmap_data(
         print(f"[{i+1}/{len(sample_points)}] ({pct:.1f}%) {eta_str}")
         
         revenue = calculate_annual_revenue_for_point(
-            lat, lon, year, turbine_params, price_usd_mwh, verbose
+            lat, lon, year, turbine_params, iso_prices, verbose
         )
         
         sample_revenues.append(revenue)
@@ -231,6 +263,7 @@ def generate_heatmap_data(
     
     # Create final data structure
     print("\nCreating final data structure...")
+    avg_iso_price = sum(iso_prices.values()) / len(iso_prices) if iso_prices else 0.0
     heatmap_data = create_heatmap_data_structure(
         lat_grid=lat_grid,
         lon_grid=lon_grid,
@@ -238,10 +271,11 @@ def generate_heatmap_data(
         availability_mask=availability_mask,
         year=year,
         turbine_params=turbine_params,
-        price_usd_mwh=price_usd_mwh,
+        price_usd_mwh=avg_iso_price,
         sample_points=sample_points,
         us_mask=us_mask,
-        offshore_buffer_km=offshore_buffer_km
+        offshore_buffer_km=offshore_buffer_km,
+        iso_prices=iso_prices
     )
     
     # Summary statistics
