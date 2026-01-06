@@ -1,0 +1,12 @@
+{
+  "iso": "Ercot",
+  "year": 2024,
+  "records": 8784,
+  "min_price": -4.89,
+  "max_price": 380.8,
+  "mean_price": 35.22076161202186,
+  "median_price": 31.82,
+  "std_price": 17.687913895801607,
+  "negative_hours": 11,
+  "generated_at": "2026-01-06T09:27:35.678042"
+}

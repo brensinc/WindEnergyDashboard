@@ -2,10 +2,24 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import pydeck as pdk
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Folium imports for interactive maps
+from streamlit_folium import st_folium
+from map_components import (
+    create_base_map,
+    add_project_markers,
+    add_heatmap_from_cache,
+    add_layer_control,
+    get_click_coordinates,
+    add_legend_to_map,
+    add_single_marker
+)
+from heatmap_utils import (
+    load_heatmap_cache,
+    get_revenue_stats,
+)
 
 from windlib import (
     load_projects_from_disk,
@@ -55,6 +69,22 @@ if "last_query_key" not in st.session_state:
 if "query_params" not in st.session_state:
     st.session_state.query_params = {}
 
+# Map interaction session state
+if "clicked_coords" not in st.session_state:
+    st.session_state.clicked_coords = None
+
+if "show_location_confirm" not in st.session_state:
+    st.session_state.show_location_confirm = False
+
+if "confirmed_lat" not in st.session_state:
+    st.session_state.confirmed_lat = None
+
+if "confirmed_lng" not in st.session_state:
+    st.session_state.confirmed_lng = None
+
+# if "show_heatmap" not in st.session_state:
+#     st.session_state.show_heatmap = False
+
 # -----------------------------
 # Sidebar: project selection
 # -----------------------------
@@ -88,8 +118,13 @@ with st.sidebar.expander("Create a new project", expanded=False):
 
     with st.form("create_project_form", clear_on_submit=False):
         name = st.text_input("Project name", value="New Wind Project")
-        lat = st.number_input("Latitude", value=float(p.get("latitude", 37.75)), format="%.6f")
-        lon = st.number_input("Longitude", value=float(p.get("longitude", -122.45)), format="%.6f")
+        
+        # Use confirmed coordinates from map click if available, otherwise use defaults
+        default_lat = st.session_state.confirmed_lat if st.session_state.confirmed_lat is not None else p.get("latitude", 37.75)
+        default_lng = st.session_state.confirmed_lng if st.session_state.confirmed_lng is not None else p.get("longitude", -122.45)
+        
+        lat = st.number_input("Latitude", value=float(default_lat), format="%.4f")
+        lon = st.number_input("Longitude", value=float(default_lng), format="%.4f")
 
         fixed_price = None
         iso_name = None
@@ -170,6 +205,25 @@ if st.sidebar.button("Clear cached data"):
     st.session_state.last_query_key = None
     st.sidebar.success("Cache cleared.")
     st.rerun()
+
+# -----------------------------
+# Sidebar: Heatmap controls
+# -----------------------------
+# st.sidebar.divider()
+# st.sidebar.subheader("Revenue Heatmap")
+
+# show_heatmap = st.sidebar.checkbox(
+#     "Show Annual Revenue Heatmap",
+#     value=st.session_state.show_heatmap,
+#     help="Displays estimated annual revenue across the US (based on 2024 data, $50/MWh fixed price)"
+# )
+# st.session_state.show_heatmap = show_heatmap
+
+# if show_heatmap:
+#     st.sidebar.caption(
+#         "Heatmap shows estimated annual revenue at $50/MWh fixed price. "
+#         "Create a project for precise calculations."
+#     )
 
 # -----------------------------
 # Sidebar: query controls
@@ -264,23 +318,27 @@ st.caption("Use the sidebar controls to select a project and click **Requery** t
 if query_is_stale:
     st.warning("Sidebar settings changed. Click **Requery** to refresh results.")
 
-if st.session_state.df is None or len(st.session_state.df) == 0:
-    st.info("No data loaded yet. Select a range and click **Requery**.")
-    st.stop()
+# Check if data is available
+data_available = st.session_state.df is not None and len(st.session_state.df) > 0
 
-df = st.session_state.df
-local_tz = get_tz_from_latlon(p["latitude"], p["longitude"])
-st.success(f"Loaded {len(df):,} rows | {df['timestamp'].min()} → {df['timestamp'].max()} ({local_tz.key})")
+if data_available:
+    df = st.session_state.df
+    local_tz = get_tz_from_latlon(p["latitude"], p["longitude"])
+    st.success(f"Loaded {len(df):,} rows | {df['timestamp'].min()} → {df['timestamp'].max()} ({local_tz.key})")
+    
+    # Check for price fetching warnings
+    price_warning = df.attrs.get("price_warning") if hasattr(df, "attrs") else None
+    if price_warning:
+        st.warning(f"**Price data issue:** {price_warning}")
 
+    tz_info = tz_mismatch_message(
+        project_tz=local_tz,
+        iso_name=p.get("iso_name"),
+    )
 
-tz_info = tz_mismatch_message(
-    project_tz=local_tz,
-    iso_name=p.get("iso_name"),
-)
-
-if tz_info and st.session_state.query_params.get("include_prices", False):
-    st.info(
-        f"""
+    if tz_info and st.session_state.query_params.get("include_prices", False):
+        st.info(
+            f"""
 **Timezone notice**
 
 Your wind site is in **{tz_info['project_tz']}**,  
@@ -291,11 +349,13 @@ As a result:
 
 All prices are shown in the **project's local timezone** for consistency.
 """,
-        icon="⏰",
-    )
+            icon="⏰",
+        )
+else:
+    st.info("No data loaded yet. Select a date range and click **Requery** to fetch wind data.")
 
 # -----------------------------
-# Project Metadata
+# Project Metadata and Map (always show)
 # -----------------------------
 
 # Layout
@@ -305,54 +365,89 @@ with colA:
     st.subheader("Project")
     st.write(f"**{p['name']}** (`{p['project_id']}`)")
     st.write(f"Lat/Lon: **{p['latitude']:.4f}, {p['longitude']:.4f}**")
-    st.write(f"ISO Name: **{iso_name}**")
-    st.write(f"lmp_market: **{lmp_market}**")
+    st.write(f"ISO Name: **{p.get('iso_name', 'N/A')}**")
+    st.write(f"lmp_market: **{p.get('lmp_market', 'N/A')}**")
 
-    st.write(f"Hub height used: **{int(df['hub_height_m'].iloc[0])} m**")
+    if data_available:
+        st.write(f"Hub height used: **{int(df['hub_height_m'].iloc[0])} m**")
+    else:
+        st.write(f"Hub height: **{p.get('hub_height_m', 100)} m**")
     st.write(f"Rated power: **{p['rated_power_mw']} MW**")
     st.write(f"Cut-in / Rated / Cut-out: **{p['cut_in_mps']} / {p['rated_speed_mps']} / {p['cut_out_mps']} m/s**")
 
-    # map_df = pd.DataFrame({"lat": [p["latitude"]], "lon": [p["longitude"]]})
-    # st.map(map_df, zoom=6)
     dot_color = [255, 120, 0]
 
 # -----------------------------
-# Map
+# Map (Folium with click-to-select and heatmap support)
 # -----------------------------
 
 with colB:
-    map_df = pd.DataFrame({
-        "lat": [p["latitude"]],
-        "lon": [p["longitude"]],
-        "label": [f"{p['name']}\n({p['latitude']:.4f}, {p['longitude']:.4f})"],
-    })
+    # Create base map centered on US
+    m = create_base_map(center=[39.8283, -98.5795], zoom=4)
+    
+    # Add all project markers
+    add_project_markers(m, st.session_state.projects, st.session_state.selected_project_id)
+        
+    add_project_markers(m, st.session_state.projects, st.session_state.selected_project_id)
+    # Add marker for last clicked location
+    if st.session_state.clicked_coords:
+        lat, lng = st.session_state.clicked_coords
+        add_single_marker(m, lat, lng, name="Selected Location", color='blue')
 
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=map_df,
-        get_position="[lon, lat]",
-        get_radius=2000,   # adjust for zoom/scale
-        pickable=True, 
-        get_fill_color=dot_color,
-
+    # Add heatmap layer if enabled
+    # if st.session_state.show_heatmap:
+    heatmap_data = load_heatmap_cache(year=2024)
+    if heatmap_data is not None:
+        add_heatmap_from_cache(m, heatmap_data, name="Annual Revenue (2024)")
+        # Add legend
+        stats = get_revenue_stats(heatmap_data)
+        add_legend_to_map(m, stats["min"], stats["max"])
+    else:
+        st.warning("Heatmap data not found. Run `python generate_heatmap.py` to generate it.")
+    
+    # Add layer control for toggling
+    add_layer_control(m)
+    
+    # Render map and capture click events
+    map_data = st_folium(
+        m,
+        height=400,
+        width=None,  # Use full container width
+        key="main_map",
+        returned_objects=["last_clicked"],
     )
-
-    tooltip = {
-        "text": "{label}"
-    }
-
-    view_state = pdk.ViewState(
-        latitude=p["latitude"],
-        longitude=p["longitude"],
-        zoom=7,
-    )
-
-    st.pydeck_chart(pdk.Deck(
-        layers=[layer],
-        initial_view_state=view_state,
-        tooltip=tooltip,
-        map_style='light'
-    ))
+    
+    # Handle map clicks
+    clicked = get_click_coordinates(map_data)
+    if clicked is not None:
+        new_lat, new_lng = clicked
+        # Only update if this is a new click (different from previous)
+        if st.session_state.clicked_coords != (new_lat, new_lng):
+            st.session_state.clicked_coords = (new_lat, new_lng)
+            st.session_state.show_location_confirm = True
+    
+    # Floating confirmation overlay for location selection
+    if st.session_state.show_location_confirm and st.session_state.clicked_coords:
+        lat, lng = st.session_state.clicked_coords
+        
+        st.info(f"**Selected Location:** {lat:.4f}, {lng:.4f}")
+        
+        col_confirm, col_cancel = st.columns(2)
+        
+        with col_confirm:
+            if st.button("Use This Location", type="primary", key="confirm_location"):
+                st.session_state.confirmed_lat = lat
+                st.session_state.confirmed_lng = lng
+                st.session_state.show_location_confirm = False
+                st.session_state.clicked_coords = None
+                st.success(f"Location set! Open 'Create a new project' in sidebar to use these coordinates.")
+                st.rerun()
+        
+        with col_cancel:
+            if st.button("Cancel", key="cancel_location"):
+                st.session_state.clicked_coords = None
+                st.session_state.show_location_confirm = False
+                st.rerun()
 
 
 # -----------------------------
@@ -364,182 +459,169 @@ tab_overview, tab_ts, tab_wind, tab_rev, tab_settings = st.tabs(
 
 # ---------- Overview ----------
 with tab_overview:
-    # st.subheader("Project Summary")
-    # c1, c2, c3, c4 = st.columns(4)
-    # c1.metric("Project", p.get("name", "—"))
-    # c2.metric("Lat/Lon", f"{p['latitude']:.3f}, {p['longitude']:.3f}")
-    # c3.metric("Rated Power (MW)", f"{p.get('rated_power_mw', np.nan)}")
-    # c4.metric("Pricing", "Included" if st.session_state.query_params.get("include_prices", True) else "Not pulled")
+    if not data_available:
+        st.info("No data loaded. Select a date range and click **Requery** to see analytics.")
+    else:
+        # A couple of quick KPIs (feel free to expand)
+        st.subheader("Quick KPIs (loaded range)")
+        if "energy_mwh" in df.columns:
+            total_energy = float(np.nansum(df["energy_mwh"]))
+            st.metric("Total Energy (MWh)", f"{total_energy:,.1f}")
 
-    # st.divider()
+        if "price_usd_mwh" in df.columns and df["price_usd_mwh"].notna().any():
+            st.metric("Avg Price ($/MWh)", f"{df['price_usd_mwh'].mean():.2f}")
 
-    # A couple of quick KPIs (feel free to expand)
-    st.subheader("Quick KPIs (loaded range)")
-    if "energy_mwh" in df.columns:
-        total_energy = float(np.nansum(df["energy_mwh"]))
-        st.metric("Total Energy (MWh)", f"{total_energy:,.1f}")
+        if "revenue_usd" in df.columns and df["revenue_usd"].notna().any():
+            st.metric("Total Revenue ($)", f"{df['revenue_usd'].sum():,.0f}")
 
-    if "price_usd_mwh" in df.columns and df["price_usd_mwh"].notna().any():
-        st.metric("Avg Price ($/MWh)", f"{df['price_usd_mwh'].mean():.2f}")
-
-    if "revenue_usd" in df.columns and df["revenue_usd"].notna().any():
-        st.metric("Total Revenue ($)", f"{df['revenue_usd'].sum():,.0f}")
-
-    st.caption("Use the tabs above to drill into time series and analytics.")
+        st.caption("Use the tabs above to drill into time series and analytics.")
 
 # ---------- Time Series ----------
 with tab_ts:
-    # st.set_page_config(page_title="Time Series", layout="wide")
     st.title("Time Series")
 
-    if st.session_state.get("df") is None or len(st.session_state.df) == 0:
-        st.warning("No data loaded. Go to the main page and click **Requery**.")
-        st.stop()
-
-    df = st.session_state.df
-
-    st.subheader("Wind speed (m/s)")
-    st.plotly_chart(px.line(df, x="timestamp", y="wind_speed_mps", color="data_type"), use_container_width=True, key="ts_wind_speed")
-
-    st.subheader("Power (MW) and Price ($/MWh)")
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(
-        go.Scatter(
-            x=df["timestamp"],
-            y=df["power_mw"],
-            name=f"Power (MW)",
-            mode="lines",
-        ),
-        secondary_y=False,
-    )
-
-    if df["price_usd_mwh"].notna().any():
-        for dtype, dfg in df.groupby("data_type"):
-            fig.add_trace(
-                go.Scatter(
-                    x=dfg["timestamp"],
-                    y=dfg["price_usd_mwh"],
-                    name=f"Price ({dtype})",
-                    mode="lines",
-                    line=dict(dash="dot"),
-                ),
-                secondary_y=True,
-            )
+    if not data_available:
+        st.info("No data loaded. Select a date range and click **Requery** to see time series.")
     else:
-        st.info("Price data is disabled. Enable **Pull price data** on the main page and click **Requery** to see price/revenue charts.")
-    
-    # ---- Axis labels ----
-    fig.update_yaxes(title_text="Power (MW)", secondary_y=False)
-    fig.update_yaxes(title_text="Price ($/MWh)", secondary_y=True)
+        df = st.session_state.df
+
+        st.subheader("Wind speed (m/s)")
+        st.plotly_chart(px.line(df, x="timestamp", y="wind_speed_mps", color="data_type"), use_container_width=True, key="ts_wind_speed")
+
+        st.subheader("Power (MW) and Price ($/MWh)")
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(
+            go.Scatter(
+                x=df["timestamp"],
+                y=df["power_mw"],
+                name=f"Power (MW)",
+                mode="lines",
+            ),
+            secondary_y=False,
+        )
+
+        if df["price_usd_mwh"].notna().any():
+            for dtype, dfg in df.groupby("data_type"):
+                fig.add_trace(
+                    go.Scatter(
+                        x=dfg["timestamp"],
+                        y=dfg["price_usd_mwh"],
+                        name=f"Price ({dtype})",
+                        mode="lines",
+                        line=dict(dash="dot"),
+                    ),
+                    secondary_y=True,
+                )
+        else:
+            st.info("Price data is disabled. Enable **Pull price data** on the main page and click **Requery** to see price/revenue charts.")
+        
+        # ---- Axis labels ----
+        fig.update_yaxes(title_text="Power (MW)", secondary_y=False)
+        fig.update_yaxes(title_text="Price ($/MWh)", secondary_y=True)
 
 
-    fig.update_layout(
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=40, r=40, t=40, b=40),
-        hovermode="x unified",
-    )
+        fig.update_layout(
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=40, r=40, t=40, b=40),
+            hovermode="x unified",
+        )
 
-    st.plotly_chart(fig, use_container_width=True, key="ts_power_price")
+        st.plotly_chart(fig, use_container_width=True, key="ts_power_price")
 
-    st.subheader("Revenue ($/hr)")
-    st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True)
+        st.subheader("Revenue ($/hr)")
+        st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True)
 
 # ---------- Wind Analytics ----------
 with tab_wind:
-    # st.set_page_config(page_title="Wind Analytics", layout="wide")
     st.title("Wind Resource Analytics")
 
-    if st.session_state.get("df") is None or len(st.session_state.df) == 0:
-        st.warning("No data loaded. Go to the main page and click **Requery**.")
-        st.stop()
+    if not data_available:
+        st.info("No data loaded. Select a date range and click **Requery** to see wind analytics.")
+    else:
+        df = st.session_state.df
+        p = st.session_state.projects[st.session_state.selected_project_id]
 
-    df = st.session_state.df
-    p = st.session_state.projects[st.session_state.selected_project_id]
+        df_hist = df[df["data_type"] == "historical"].copy()
 
-    df_hist = df[df["data_type"] == "historical"].copy()
+        c1, c2 = st.columns(2)
 
-    c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Monthly capacity factor profile")
+            m = monthly_capacity_factor(df_hist, p["rated_power_mw"])
+            st.plotly_chart(px.line(m, x="month", y="capacity_factor"), use_container_width=True)
 
-    with c1:
-        st.subheader("Monthly capacity factor profile")
-        m = monthly_capacity_factor(df_hist, p["rated_power_mw"])
-        st.plotly_chart(px.line(m, x="month", y="capacity_factor"), use_container_width=True)
+        with c2:
+            st.subheader("Seasonal capacity factor")
+            s = seasonal_capacity_factor(df_hist, p["rated_power_mw"])
+            st.plotly_chart(px.bar(s, x="season", y="capacity_factor"), use_container_width=True)
 
-    with c2:
-        st.subheader("Seasonal capacity factor")
-        s = seasonal_capacity_factor(df_hist, p["rated_power_mw"])
-        st.plotly_chart(px.bar(s, x="season", y="capacity_factor"), use_container_width=True)
+        st.divider()
 
-    st.divider()
+        c3, c4 = st.columns(2)
 
-    c3, c4 = st.columns(2)
+        with c3:
+            st.subheader("Exceedance curve")
+            ex = exceedance_curve(df_hist, threshold_mps=p["rated_speed_mps"])
+            fig = px.line(ex, x="wind_speed_mps", y="pct_hours_ge")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"% hours ≥ rated speed ({p['rated_speed_mps']} m/s): {ex.attrs.get('threshold_pct', float('nan')):.2f}%")
 
-    with c3:
-        st.subheader("Exceedance curve")
-        ex = exceedance_curve(df_hist, threshold_mps=p["rated_speed_mps"])
-        fig = px.line(ex, x="wind_speed_mps", y="pct_hours_ge")
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"% hours ≥ rated speed ({p['rated_speed_mps']} m/s): {ex.attrs.get('threshold_pct', float('nan')):.2f}%")
+        with c4:
+            st.subheader("Downtime risk by month")
+            d = downtime_risk_by_month(df_hist, p["cut_in_mps"], p["cut_out_mps"])
+            fig = px.line(d, x="month", y=["pct_below_cut_in", "pct_above_cut_out"])
+            st.plotly_chart(fig, use_container_width=True)
 
-    with c4:
-        st.subheader("Downtime risk by month")
-        d = downtime_risk_by_month(df_hist, p["cut_in_mps"], p["cut_out_mps"])
-        fig = px.line(d, x="month", y=["pct_below_cut_in", "pct_above_cut_out"])
-        st.plotly_chart(fig, use_container_width=True)
+        st.divider()
 
-    st.divider()
+        st.subheader("Interannual variability")
+        iav = interannual_variability(df_hist)
+        st.plotly_chart(px.bar(iav, x="year", y="total_energy"), use_container_width=True)
+        st.dataframe(iav, use_container_width=True)
 
-    st.subheader("Interannual variability")
-    iav = interannual_variability(df_hist)
-    st.plotly_chart(px.bar(iav, x="year", y="total_energy"), use_container_width=True)
-    st.dataframe(iav, use_container_width=True)
-
-    st.subheader("P50/P90 Annual Energy (bootstrap over years)")
-    boot = annual_energy_bootstrap(df_hist, n_boot=2000)
-    st.write(f"Years available: **{boot['years']}**")
-    st.write(f"P50 AEP (MWh): **{boot['p50']:.0f}**")
-    st.write(f"P90 AEP (MWh): **{boot['p90']:.0f}**")
-    st.write(f"P10 AEP (MWh): **{boot['p10']:.0f}**")
-    st.dataframe(boot["annual_table"], use_container_width=True)
+        st.subheader("P50/P90 Annual Energy (bootstrap over years)")
+        boot = annual_energy_bootstrap(df_hist, n_boot=2000)
+        st.write(f"Years available: **{boot['years']}**")
+        st.write(f"P50 AEP (MWh): **{boot['p50']:.0f}**")
+        st.write(f"P90 AEP (MWh): **{boot['p90']:.0f}**")
+        st.write(f"P10 AEP (MWh): **{boot['p10']:.0f}**")
+        st.dataframe(boot["annual_table"], use_container_width=True)
 
 
 # ---------- Revenue Analytics ----------
 with tab_rev:
-    # st.set_page_config(page_title="Revenue Analytics", layout="wide")
     st.title("Revenue & Market Analytics")
 
-    if st.session_state.get("df") is None or len(st.session_state.df) == 0:
-        st.warning("No data loaded. Go to the main page and click **Requery**.")
-        st.stop()
+    if not data_available:
+        st.info("No data loaded. Select a date range and click **Requery** to see revenue analytics.")
+    else:
+        df = st.session_state.df
+        p = st.session_state.projects[st.session_state.selected_project_id]
 
-    df = st.session_state.df
-    p = st.session_state.projects[st.session_state.selected_project_id]
+        if not df["price_usd_mwh"].notna().any():
+            st.info("Price data is disabled. Enable **Pull price data** on the main page and click **Requery**.")
+        else:
+            df_hist = df[df["data_type"] == "historical"].copy()
+            df_hist["month"] = df_hist["timestamp"].dt.to_period("M").dt.to_timestamp()
 
-    if not df["price_usd_mwh"].notna().any():
-        st.info("Price data is disabled. Enable **Pull price data** on the main page and click **Requery**.")
-        st.stop()
+            c1, c2 = st.columns(2)
 
-    df_hist = df[df["data_type"] == "historical"].copy()
-    df_hist["month"] = df_hist["timestamp"].dt.to_period("M").dt.to_timestamp()
+            with c1:
+                st.subheader("Revenue time series")
+                st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True, key="ts_revenue")
 
-    c1, c2 = st.columns(2)
+            with c2:
+                st.subheader("Price distribution by month")
+                box = px.box(df_hist, x="month", y="price_usd_mwh")
+                box.update_xaxes(tickformat="%Y-%m")
+                st.plotly_chart(box, use_container_width=True)
 
-    with c1:
-        st.subheader("Revenue time series")
-        st.plotly_chart(px.line(df, x="timestamp", y="revenue_usd", color="data_type"), use_container_width=True, key="ts_revenue")
+            st.divider()
 
-    with c2:
-        st.subheader("Price distribution by month")
-        box = px.box(df_hist, x="month", y="price_usd_mwh")
-        box.update_xaxes(tickformat="%Y-%m")
-        st.plotly_chart(box, use_container_width=True)
-
-    st.divider()
-
-    st.subheader("Monthly revenue")
-    monthly = df_hist.groupby("month", as_index=False)["revenue_usd"].sum()
-    st.plotly_chart(px.bar(monthly, x="month", y="revenue_usd"), use_container_width=True, key="rev_revenue_ts")
-    st.dataframe(monthly, use_container_width=True)
+            st.subheader("Monthly revenue")
+            monthly = df_hist.groupby("month", as_index=False)["revenue_usd"].sum()
+            st.plotly_chart(px.bar(monthly, x="month", y="revenue_usd"), use_container_width=True, key="rev_revenue_ts")
+            st.dataframe(monthly, use_container_width=True)
 
 
 # ---------- Settings ----------

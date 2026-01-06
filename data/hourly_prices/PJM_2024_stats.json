@@ -1,0 +1,12 @@
+{
+  "iso": "PJM",
+  "year": 2024,
+  "records": 8784,
+  "min_price": 15.77,
+  "max_price": 363.6,
+  "mean_price": 37.80819330601092,
+  "median_price": 35.14,
+  "std_price": 15.447533449596209,
+  "negative_hours": 0,
+  "generated_at": "2026-01-06T09:27:35.428822"
+}

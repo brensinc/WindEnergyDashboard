@@ -1,0 +1,12 @@
+{
+  "iso": "MISO",
+  "year": 2024,
+  "records": 8784,
+  "min_price": -4.58,
+  "max_price": 216.01,
+  "mean_price": 27.08997267759563,
+  "median_price": 25.65,
+  "std_price": 10.017095619219724,
+  "negative_hours": 9,
+  "generated_at": "2026-01-06T09:27:35.346547"
+}

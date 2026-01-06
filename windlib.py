@@ -19,8 +19,49 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 REFERENCE_HUB_HEIGHT_M = 100
 
-ISO_CHOICES = ["CAISO", "Ercot", "ISONE", "MISO", "NYISO", "PJM", "SPP"]
-LMP_MARKETS = ["DAY_AHEAD_HOURLY", "REAL_TIME_HOURLY", "REAL_TIME_5_MIN"]
+from shapely.geometry import Polygon, Point
+
+ISO_CHOICES = ["CAISO", "Ercot", "ISONE", "MISO", "NYISO", "PJM"]
+LMP_MARKETS = ["DAY_AHEAD_HOURLY", 
+            #    "REAL_TIME_HOURLY", 
+            #    "REAL_TIME_5_MIN"
+               ]
+
+ISO_BOUNDARIES = {
+    "CAISO": Polygon([
+        (-124.5, 42.0), (-124.0, 41.5), (-124.2, 40.5), (-124.1, 39.0),
+        (-123.5, 38.0), (-122.5, 37.5), (-121.5, 36.5), (-120.5, 35.5),
+        (-119.5, 34.5), (-118.5, 33.5), (-117.5, 32.5), (-116.5, 32.5),
+        (-115.5, 33.0), (-114.5, 34.0), (-114.0, 35.0), (-114.5, 36.0),
+        (-115.5, 37.0), (-117.0, 37.5), (-118.5, 38.0), (-120.0, 39.0),
+        (-121.5, 40.0), (-123.0, 41.0), (-124.5, 42.0)
+    ]).buffer(0),
+    "Ercot": Polygon([
+        (-106.6, 36.5), (-100.0, 36.0), (-97.0, 35.5), (-96.0, 34.0),
+        (-95.5, 32.5), (-95.0, 30.0), (-94.0, 28.0), (-93.0, 27.0),
+        (-94.0, 26.0), (-97.0, 25.5), (-99.0, 26.0), (-101.0, 28.0),
+        (-103.0, 30.0), (-105.0, 33.0), (-106.6, 36.5)
+    ]).buffer(0),
+    "ISONE": Polygon([
+        (-74.0, 45.0), (-73.0, 45.0), (-70.0, 45.0), (-70.0, 42.0),
+        (-69.0, 42.0), (-69.0, 41.0), (-71.0, 41.0), (-73.0, 42.0),
+        (-74.0, 44.0), (-74.0, 45.0)
+    ]).buffer(0),
+    "NYISO": Polygon([
+        (-79.5, 45.0), (-79.5, 42.0), (-72.0, 42.0), (-72.0, 40.5),
+        (-74.0, 40.5), (-75.0, 41.0), (-76.5, 41.5), (-79.5, 42.0),
+        (-79.5, 45.0)
+    ]).buffer(0),
+    "MISO": Polygon([
+        (-97.0, 49.0), (-89.0, 49.0), (-82.0, 49.0), (-82.0, 34.5),
+        (-84.0, 34.5), (-86.0, 34.5), (-88.0, 34.5), (-90.0, 34.5),
+        (-91.0, 34.0), (-92.0, 33.0), (-93.0, 32.0), (-93.0, 31.0),
+        (-97.0, 31.0)
+    ]).buffer(0),
+    "PJM": Polygon([
+        (-91.5, 42.5), (-91.5, 34.0), (-72.0, 34.0), (-72.0, 42.5)
+    ]).buffer(0),
+}
 
 PRICE_MODELS = ["Fixed", "Market"]
 
@@ -324,74 +365,116 @@ def get_market_prices_gridstatus(
     location_type: str = "Hub",
     local_tz: ZoneInfo = ZoneInfo("UTC"),
 ) -> pd.DataFrame:
+    """
+    Fetch market prices from gridstatus for a given ISO.
+    
+    Note: Different ISOs have different API requirements:
+    - CAISO, ISONE, MISO: Don't support location_type parameter
+    - NYISO: Uses 'zone' or 'generator' instead of 'Hub'
+    - PJM: Requires PJM_API_KEY environment variable
+    - Ercot: Uses get_spp() instead of get_lmp(), limited historical data
+    
+    Args:
+        iso_name: Name of the ISO (CAISO, Ercot, ISONE, MISO, NYISO, PJM)
+        start_date: Start date string (YYYY-MM-DD)
+        end_date: End date string (YYYY-MM-DD)
+        market: Market type (DAY_AHEAD_HOURLY, REAL_TIME_HOURLY, REAL_TIME_5_MIN)
+        location_type: Location type (varies by ISO)
+        local_tz: Timezone for output timestamps
+        
+    Returns:
+        DataFrame with timestamp and price_usd_mwh columns
+        
+    Raises:
+        ValueError: If no data returned or ISO not supported
+    """
     iso_class = getattr(gridstatus, iso_name, None)
     if iso_class is None:
         raise ValueError(f"Unsupported ISO class: {iso_name}")
-    iso = iso_class()
-
-    sig = inspect.signature(iso.get_lmp)
-    base_kwargs = {
-        "market": market,
-    }
-    if "location_type" in sig.parameters:
-        base_kwargs["location_type"] = location_type
-
-    # Pull in monthly chunks to reduce rate-limit issues
-    dfs = []
-    # for s, e in _date_chunks(start_date, end_date, freq="MS"):
-    #     kwargs = dict(base_kwargs)
-    #     kwargs["start"] = pd.Timestamp(s)
-    #     kwargs["end"] = pd.Timestamp(e) + pd.Timedelta(days=1)  # treat as exclusive
-    #     # df_chunk = iso.get_lmp(**kwargs)
-
-    #     if iso_name == "Ercot":
-    #         df_chunk = iso.get_spp(**kwargs)
-    #     else:
-    #         df_chunk = iso.get_lmp(**kwargs)
-
-    #     if df_chunk is not None and len(df_chunk):
-    #         dfs.append(df_chunk)
-
-    # if not dfs:
-    #     raise ValueError("No LMP data returned from gridstatus for this query.")
-
-    # df = pd.concat(dfs, ignore_index=True)
+    
+    try:
+        iso = iso_class()
+    except Exception as e:
+        raise ValueError(f"Failed to initialize {iso_name}: {e}")
 
     dfs = []
+    errors = []
+    
     for s, e in _date_chunks(start_date, end_date, freq="MS"):
-        print("iso_name:", iso_name)
-        
-        if iso_name == "Ercot":
-            # ERCOT uses get_spp(date, end=...)
-            df_chunk = iso.get_spp(
-                date=pd.Timestamp(s),
-                end=pd.Timestamp(e),
-                market="DAY_AHEAD_HOURLY",
-                location_type="Trading Hub",   # or "Load Zone", "Resource Node"
-            )
-        else:
-            df_chunk = iso.get_lmp(
-                start=pd.Timestamp(s),
-                end=pd.Timestamp(e) + pd.Timedelta(days=1),  # exclusive end for LMP path
-                market=market,
-                location_type=location_type,
-            )
+        try:
+            df_chunk = None
+            
+            if iso_name == "Ercot":
+                # ERCOT uses get_spp() with different parameters
+                # Note: Ercot's end parameter appears to be exclusive, so add 1 day
+                # Also, DAM prices are published the day before, so extend range
+                df_chunk = iso.get_spp(
+                    date=pd.Timestamp(s) - pd.Timedelta(days=1),  # Start 1 day earlier to catch DAM prices
+                    end=pd.Timestamp(e) + pd.Timedelta(days=1),   # End is exclusive, so add 1 day
+                    market=market,
+                    location_type="Trading Hub",
+                )
+            elif iso_name == "NYISO":
+                # NYISO uses 'zone' instead of 'Hub'
+                df_chunk = iso.get_lmp(
+                    start=pd.Timestamp(s),
+                    end=pd.Timestamp(e) + pd.Timedelta(days=1),
+                    market=market,
+                    location_type="zone",
+                )
+            elif iso_name in ("CAISO", "ISONE", "MISO"):
+                # These ISOs don't support location_type parameter
+                df_chunk = iso.get_lmp(
+                    start=pd.Timestamp(s),
+                    end=pd.Timestamp(e) + pd.Timedelta(days=1),
+                    market=market,
+                )
+            elif iso_name == "PJM":
+                # PJM requires API key - check signature for location_type support
+                sig = inspect.signature(iso.get_lmp)
+                kwargs = {
+                    "start": pd.Timestamp(s),
+                    "end": pd.Timestamp(e) + pd.Timedelta(days=1),
+                    "market": market,
+                }
+                if "location_type" in sig.parameters:
+                    kwargs["location_type"] = location_type
+                df_chunk = iso.get_lmp(**kwargs)
+            else:
+                # Generic fallback - try with location_type first
+                sig = inspect.signature(iso.get_lmp)
+                kwargs = {
+                    "start": pd.Timestamp(s),
+                    "end": pd.Timestamp(e) + pd.Timedelta(days=1),
+                    "market": market,
+                }
+                if "location_type" in sig.parameters:
+                    kwargs["location_type"] = location_type
+                df_chunk = iso.get_lmp(**kwargs)
 
-        if df_chunk is not None and len(df_chunk):
-            dfs.append(df_chunk)
+            if df_chunk is not None and len(df_chunk) > 0:
+                dfs.append(df_chunk)
+                
+        except Exception as chunk_error:
+            errors.append(f"{s} to {e}: {str(chunk_error)[:100]}")
+            continue
 
     if not dfs:
-        raise ValueError(f"No price data returned for {iso_name} between {start_date} and {end_date}")
+        error_details = "; ".join(errors) if errors else "No specific error"
+        raise ValueError(
+            f"No price data returned for {iso_name} between {start_date} and {end_date}. "
+            f"Errors: {error_details}"
+        )
 
     df = pd.concat(dfs, ignore_index=True)
 
-
-    time_col = next((c for c in ["Time", "time", "timestamp", "Datetime", "DATETIME"] if c in df.columns), None)
+    # Find timestamp column
+    time_col = next((c for c in ["Time", "time", "timestamp", "Datetime", "DATETIME", "Interval Start"] if c in df.columns), None)
     if time_col is None:
         raise ValueError(f"Could not find a time column in LMP data. Columns: {list(df.columns)}")
-    # price_col = next((c for c in ["LMP", "lmp", "price", "Price", "LBMP"] if c in df.columns), None)
+    
+    # Find price column
     price_col = next((c for c in ["LMP", "lmp", "price", "Price", "LBMP", "SPP"] if c in df.columns), None)
-
     if price_col is None:
         raise ValueError(f"Could not find a price column in LMP data. Columns: {list(df.columns)}")
 
@@ -415,11 +498,42 @@ def get_market_prices_gridstatus(
         .mean()
         .sort_values("timestamp")
     )
+    
+    # Filter to requested date range (some APIs return extra data)
+    # Convert start/end dates to timezone-aware timestamps for comparison
+    start_ts = pd.Timestamp(start_date).tz_localize(local_tz)
+    end_ts = pd.Timestamp(end_date).tz_localize(local_tz) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    
+    out = out[(out["timestamp"] >= start_ts) & (out["timestamp"] <= end_ts)]
+    
     return out
 
+class MarketPriceError(Exception):
+    """Raised when market price data cannot be fetched."""
+    pass
+
+
 def add_prices_and_revenue(df: pd.DataFrame, project: dict, local_tz: ZoneInfo, include_prices: bool) -> pd.DataFrame:
+    """
+    Add price and revenue columns to wind data DataFrame.
+    
+    For market pricing, attempts to fetch prices from gridstatus API.
+    If the fetch fails, returns DataFrame with NaN prices and a warning attribute.
+    
+    Args:
+        df: DataFrame with wind/power data
+        project: Project configuration dict
+        local_tz: Local timezone
+        include_prices: Whether to include price data
+        
+    Returns:
+        DataFrame with price_usd_mwh and revenue_usd columns added
+    """
     out = df.copy()
     out["timestamp"] = _ensure_tzaware(out["timestamp"], local_tz)
+    
+    # Initialize warning message attribute
+    out.attrs["price_warning"] = None
 
     # If user doesn't want prices, ensure columns exist and exit
     if not include_prices:
@@ -444,17 +558,43 @@ def add_prices_and_revenue(df: pd.DataFrame, project: dict, local_tz: ZoneInfo, 
     market = project.get("lmp_market", "DAY_AHEAD_HOURLY")
     location_type = project.get("location_type", "Hub")
 
+    # Validate ISO name
+    if not iso_name:
+        out["price_usd_mwh"] = np.nan
+        out["revenue_usd"] = np.nan
+        out.attrs["price_warning"] = "No ISO specified for market pricing"
+        return out
+
     start_date = str(out["timestamp"].min().date())
     end_date = str(out["timestamp"].max().date())
 
-    prices = get_market_prices_gridstatus(
-        iso_name=iso_name,
-        start_date=start_date,
-        end_date=end_date,
-        market=market,
-        location_type=location_type,
-        local_tz=local_tz,
-    )
+    try:
+        prices = get_market_prices_gridstatus(
+            iso_name=iso_name,
+            start_date=start_date,
+            end_date=end_date,
+            market=market,
+            location_type=location_type,
+            local_tz=local_tz,
+        )
+    except ValueError as e:
+        # Market price fetch failed - return with NaN prices and warning
+        out["price_usd_mwh"] = np.nan
+        out["revenue_usd"] = np.nan
+        out.attrs["price_warning"] = f"Could not fetch market prices for {iso_name}: {str(e)[:200]}"
+        return out
+    except Exception as e:
+        # Unexpected error - still return gracefully
+        out["price_usd_mwh"] = np.nan
+        out["revenue_usd"] = np.nan
+        out.attrs["price_warning"] = f"Unexpected error fetching prices: {str(e)[:200]}"
+        return out
+
+    if prices is None or prices.empty:
+        out["price_usd_mwh"] = np.nan
+        out["revenue_usd"] = np.nan
+        out.attrs["price_warning"] = f"No price data returned for {iso_name}"
+        return out
 
     prices["timestamp"] = _ensure_tzaware(prices["timestamp"], local_tz)
 
@@ -467,20 +607,18 @@ def add_prices_and_revenue(df: pd.DataFrame, project: dict, local_tz: ZoneInfo, 
         prices,
         on="timestamp",
         direction="backward",
-        # optional, if you want to avoid matching across big gaps:
-        # tolerance=pd.Timedelta("1H"),
     )
 
     # At this point, merged should have exactly one "price_usd_mwh"
     if "price_usd_mwh" not in merged.columns:
-        # If you ever hit this, it means a suffix collision still happened
-        # (e.g., out already had a price_usd_mwh column).
-        # Resolve it explicitly:
         candidates = [c for c in merged.columns if "price_usd_mwh" in c]
         raise KeyError(f"Expected 'price_usd_mwh' after merge. Found: {candidates}")
 
     merged["price_usd_mwh"] = merged["price_usd_mwh"].ffill()
     merged["revenue_usd"] = merged["energy_mwh"] * merged["price_usd_mwh"]
+    
+    # Preserve warning attribute
+    merged.attrs["price_warning"] = out.attrs.get("price_warning")
 
     return merged
 
@@ -573,6 +711,359 @@ def interannual_variability(df_hist: pd.DataFrame) -> pd.DataFrame:
         avg_power=("power_mw", "mean"),
         total_energy=("energy_mwh", "sum")
     )
-    # Compare to typical year
     a["energy_pct_vs_mean"] = 100.0 * (a["total_energy"] - a["total_energy"].mean()) / a["total_energy"].mean()
     return a.sort_values("year")
+
+
+# -----------------------------
+# ISO Price Functions
+# -----------------------------
+
+ISO_PRICES_CACHE_DIR = Path("data")
+ISO_PRICES_CACHE_FILE = ISO_PRICES_CACHE_DIR / "iso_prices_2024.json"
+
+ISO_DEFAULT_PRICES = {
+    "CAISO": 32.50,
+    "Ercot": 28.75,
+    "ISONE": 45.20,
+    "MISO": 25.10,
+    "NYISO": 52.30,
+    "PJM": 38.90,
+}
+
+def load_iso_prices_from_cache(year: int = 2024) -> dict:
+    """Load cached ISO annual prices."""
+    cache_file = ISO_PRICES_CACHE_DIR / f"iso_prices_{year}.json"
+    if cache_file.exists():
+        try:
+            return json.loads(cache_file.read_text())
+        except Exception as e:
+            print(f"Error loading ISO prices cache: {e}")
+    return {}
+
+
+def save_iso_prices_to_cache(prices: dict, year: int = 2024) -> bool:
+    """Save ISO prices to cache."""
+    try:
+        ISO_PRICES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file = ISO_PRICES_CACHE_DIR / f"iso_prices_{year}.json"
+        cache_file.write_text(json.dumps(prices, indent=2))
+        return True
+    except Exception as e:
+        print(f"Error saving ISO prices cache: {e}")
+        return False
+
+
+def get_iso_annual_price(
+    iso_name: str,
+    year: int = 2024,
+    use_cache: bool = True,
+    force_refresh: bool = False
+) -> float:
+    """
+    Fetch annual average LMP price for an ISO.
+    
+    Uses cached prices if available, otherwise fetches from gridstatus API.
+    Only 1 API call per ISO (not per location).
+    
+    Args:
+        iso_name: ISO name (e.g., "CAISO", "PJM")
+        year: Year to fetch prices for
+        use_cache: Whether to read from cache file
+        force_refresh: Force re-fetch from API even if cached
+        
+    Returns:
+        Annual average price in $/MWh, or default price if unavailable
+    """
+    if iso_name not in ISO_BOUNDARIES:
+        print(f"Warning: ISO {iso_name} not in ISO_BOUNDARIES")
+        return 0.0
+    
+    if use_cache and not force_refresh:
+        cached = load_iso_prices_from_cache(year)
+        if iso_name in cached:
+            return cached[iso_name]
+    
+    try:
+        print(f"Fetching {iso_name} prices for {year}...")
+        
+        iso_class = getattr(gridstatus, iso_name, None)
+        if iso_class is None:
+            print(f"Warning: {iso_name} not available in gridstatus")
+            return ISO_DEFAULT_PRICES.get(iso_name, 0.0)
+        
+        iso = iso_class()
+        
+        if iso_name == "Ercot":
+            df_chunk = iso.get_spp(
+                date=f"{year}-01-01",
+                end=f"{year}-12-31",
+                market="DAY_AHEAD_HOURLY",
+                location_type="Trading Hub",
+            )
+            price_col = "SPP"
+        else:
+            df_chunk = iso.get_lmp(
+                start=f"{year}-01-01",
+                end=f"{year}-12-31",
+                market="DAY_AHEAD_HOURLY",
+                location_type="Hub",
+            )
+            price_col = next((c for c in ["LMP", "lmp", "price", "Price", "LBMP"] if c in df_chunk.columns), None)
+        
+        if df_chunk is None or df_chunk.empty:
+            print(f"No price data returned for {iso_name}")
+            return ISO_DEFAULT_PRICES.get(iso_name, 0.0)
+        
+        if price_col is None:
+            print(f"Could not find price column in {iso_name} data")
+            return ISO_DEFAULT_PRICES.get(iso_name, 0.0)
+        
+        avg_price = df_chunk[price_col].mean()
+        price_usd_mwh = float(avg_price)
+        
+        print(f"  {iso_name} avg price: ${price_usd_mwh:.2f}/MWh")
+        
+        return price_usd_mwh
+        
+    except Exception as e:
+        print(f"Error fetching {iso_name} prices: {e}")
+        return ISO_DEFAULT_PRICES.get(iso_name, 0.0)
+
+
+def get_all_iso_annual_prices(
+    year: int = 2024,
+    use_cache: bool = True,
+    force_refresh: bool = False
+) -> dict:
+    """
+    Fetch annual average prices for all supported ISOs.
+    
+    Args:
+        year: Year to fetch prices for
+        use_cache: Whether to use cached prices
+        force_refresh: Force re-fetch from API
+        
+    Returns:
+        Dictionary mapping ISO names to annual average prices
+    """
+    if use_cache and not force_refresh:
+        cached = load_iso_prices_from_cache(year)
+        if cached:
+            return cached
+    
+    prices = {}
+    for iso_name in ISO_BOUNDARIES.keys():
+        prices[iso_name] = get_iso_annual_price(iso_name, year, use_cache=False, force_refresh=False)
+    
+    if use_cache and not force_refresh:
+        save_iso_prices_to_cache(prices, year)
+    
+    return prices
+
+
+def get_iso_for_location(lat: float, lon: float) -> str:
+    """
+    Determine which ISO a location belongs to.
+    
+    Args:
+        lat: Latitude
+        lon: Longitude
+        
+    Returns:
+        ISO name string, or empty string if location is outside all ISOs
+    """
+    point = Point(lon, lat)
+    
+    for iso_name, polygon in ISO_BOUNDARIES.items():
+        if polygon.contains(point):
+            return iso_name
+    
+    return ""
+
+
+def _find_nearest_iso(lat: float, lon: float) -> tuple[str, float]:
+    """
+    Find the nearest ISO region to a given point.
+    
+    Args:
+        lat: Latitude
+        lon: Longitude
+        
+    Returns:
+        Tuple of (iso_name, distance_km). Returns ("", inf) if no ISOs defined.
+    """
+    point = Point(lon, lat)
+    min_distance = float('inf')
+    nearest_iso = ""
+    
+    for iso_name, polygon in ISO_BOUNDARIES.items():
+        # distance() returns degrees; convert to approximate km (1 deg ~ 111 km at equator)
+        dist_deg = polygon.distance(point)
+        dist_km = dist_deg * 111.0  # rough approximation
+        
+        if dist_km < min_distance:
+            min_distance = dist_km
+            nearest_iso = iso_name
+    
+    return nearest_iso, min_distance
+
+
+def _is_offshore_location(lat: float, lon: float) -> bool:
+    """
+    Determine if a location is likely offshore (over water).
+    
+    Uses geographic heuristics for US coastlines. Points are considered
+    offshore if they fall within known offshore wind development zones.
+    
+    Args:
+        lat: Latitude
+        lon: Longitude
+        
+    Returns:
+        True if location appears to be offshore
+    """
+    # Check if inside any ISO first - if so, definitely not offshore
+    point = Point(lon, lat)
+    for polygon in ISO_BOUNDARIES.values():
+        if polygon.contains(point):
+            return False
+    
+    # Pacific offshore: west of California/Oregon/Washington coast
+    # Approximate coastline follows roughly -124.5 at north to -117.5 at south
+    if lon < -117.0 and 32.0 < lat < 49.0:
+        # More refined check: coast curves inward
+        if lat > 42.0 and lon < -124.0:  # Oregon/Washington
+            return True
+        if 37.0 < lat <= 42.0 and lon < -123.5:  # Northern California
+            return True
+        if 34.0 < lat <= 37.0 and lon < -121.5:  # Central California
+            return True
+        if lat <= 34.0 and lon < -118.5:  # Southern California
+            return True
+    
+    # Atlantic offshore: east of the East Coast
+    # New England (Maine to Cape Cod): coast around -70 to -66
+    if 41.0 < lat < 45.0 and lon > -71.0:
+        return True
+    
+    # Mid-Atlantic (NY to VA): coast around -74 to -72
+    if 36.5 < lat <= 41.0 and lon > -74.5:
+        # Eastern edge of land is roughly -74 at NJ, -75 at VA
+        coast_lon = -74.0 + (lat - 40.0) * -0.25  # approximate coastline
+        if lon > coast_lon:
+            return True
+    
+    # Southeast (NC to FL): coast roughly -75.5 to -80
+    if 25.0 < lat <= 36.5 and lon > -81.0:
+        # Florida curves west; Carolina coast is around -75 to -76
+        if lat > 32.0 and lon > -76.0:  # Carolinas
+            return True
+        if lat <= 32.0 and lon > -80.0:  # Georgia/Florida
+            return True
+    
+    # Gulf of Mexico offshore
+    if -98.0 < lon < -82.0 and 24.0 < lat < 30.0:
+        # South of Texas/Louisiana coast
+        if lat < 29.0:  # Clearly in the Gulf
+            return True
+        # Near the coast - use approximate coastline
+        if lon < -90.0 and lat < 29.5:  # Louisiana/Texas
+            return True
+    
+    return False
+
+
+# Offshore wind premium (percentage above nearest ISO price)
+OFFSHORE_PREMIUM_PERCENT = 15.0  # 15% premium for offshore wind
+
+# Maximum distance (km) from an ISO boundary to still use nearest-ISO pricing
+# Beyond this, location is considered too remote for reliable pricing
+# Set high enough to include Pacific NW (Seattle ~620km from CAISO)
+MAX_NEAREST_ISO_DISTANCE_KM = 750.0
+
+
+def get_price_for_location(
+    lat: float,
+    lon: float,
+    iso_prices: dict,
+    apply_offshore_premium: bool = True,
+    offshore_premium_pct: float = OFFSHORE_PREMIUM_PERCENT,
+    max_fallback_distance_km: float = MAX_NEAREST_ISO_DISTANCE_KM
+) -> tuple[float, str, dict]:
+    """
+    Get the appropriate price for a location based on its ISO region.
+    
+    Implements hybrid handling:
+    1. If inside an ISO polygon -> use that ISO's price
+    2. If offshore near an ISO -> use nearest ISO price + offshore premium
+    3. If onshore outside ISOs but near one -> use nearest ISO price (fallback)
+    4. If too far from any ISO -> return 0 (no reliable price available)
+    
+    Args:
+        lat: Latitude
+        lon: Longitude
+        iso_prices: Dictionary mapping ISO names to prices
+        apply_offshore_premium: Whether to add premium for offshore locations
+        offshore_premium_pct: Premium percentage for offshore (default 15%)
+        max_fallback_distance_km: Max distance for nearest-ISO fallback
+        
+    Returns:
+        Tuple of (price_usd_mwh, pricing_type, metadata)
+        pricing_type: "iso", "offshore", "fallback", or "none"
+        metadata: Additional info (iso_name, distance_km, etc.)
+    """
+    # First, check if inside any ISO
+    iso_name = get_iso_for_location(lat, lon)
+    
+    if iso_name and iso_name in iso_prices:
+        return (
+            iso_prices[iso_name],
+            "iso",
+            {"iso_name": iso_name, "distance_km": 0.0}
+        )
+    
+    # Not inside any ISO - find nearest
+    nearest_iso, distance_km = _find_nearest_iso(lat, lon)
+    
+    if not nearest_iso or nearest_iso not in iso_prices:
+        return (0.0, "none", {"reason": "no_iso_found"})
+    
+    # Check if too far from any ISO
+    if distance_km > max_fallback_distance_km:
+        return (
+            0.0,
+            "none",
+            {"reason": "too_far", "nearest_iso": nearest_iso, "distance_km": distance_km}
+        )
+    
+    base_price = iso_prices[nearest_iso]
+    
+    # Check if offshore
+    if _is_offshore_location(lat, lon):
+        if apply_offshore_premium:
+            premium_multiplier = 1.0 + (offshore_premium_pct / 100.0)
+            offshore_price = base_price * premium_multiplier
+            return (
+                offshore_price,
+                "offshore",
+                {
+                    "nearest_iso": nearest_iso,
+                    "base_price": base_price,
+                    "premium_pct": offshore_premium_pct,
+                    "distance_km": distance_km
+                }
+            )
+        else:
+            return (
+                base_price,
+                "offshore",
+                {"nearest_iso": nearest_iso, "distance_km": distance_km}
+            )
+    
+    # Onshore but outside ISO polygons - use nearest ISO (fallback)
+    return (
+        base_price,
+        "fallback",
+        {"nearest_iso": nearest_iso, "distance_km": distance_km}
+    )

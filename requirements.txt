@@ -2,7 +2,13 @@ streamlit
 pandas
 numpy
 plotly
-pydeck
+folium>=0.14.0
+streamlit-folium>=0.15.0
+scipy>=1.10.0
+shapely>=2.0.0
+joblib>=1.3.0
 requests
 timezonefinder
 gridstatus
+pytest>=7.0.0
+geopandas>=0.13.0
