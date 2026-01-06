@@ -1,0 +1,12 @@
+{
+  "iso": "CAISO",
+  "year": 2024,
+  "records": 8784,
+  "min_price": -4.24,
+  "max_price": 472.92,
+  "mean_price": 47.23246470856102,
+  "median_price": 42.845,
+  "std_price": 20.995129591794228,
+  "negative_hours": 7,
+  "generated_at": "2026-01-06T09:27:35.260369"
+}

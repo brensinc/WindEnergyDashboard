@@ -1,0 +1,12 @@
+{
+  "iso": "NYISO",
+  "year": 2024,
+  "records": 8784,
+  "min_price": 22.12,
+  "max_price": 500.0,
+  "mean_price": 57.47020377959927,
+  "median_price": 52.65,
+  "std_price": 25.286168244965896,
+  "negative_hours": 0,
+  "generated_at": "2026-01-06T09:27:35.511669"
+}

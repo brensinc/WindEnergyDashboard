@@ -1,0 +1,74 @@
+{
+  "CAISO": {
+    "iso": "CAISO",
+    "year": 2024,
+    "records": 8784,
+    "min_price": -4.24,
+    "max_price": 472.92,
+    "mean_price": 47.23246470856102,
+    "median_price": 42.845,
+    "std_price": 20.995129591794228,
+    "negative_hours": 7,
+    "generated_at": "2026-01-06T09:27:35.260369"
+  },
+  "MISO": {
+    "iso": "MISO",
+    "year": 2024,
+    "records": 8784,
+    "min_price": -4.58,
+    "max_price": 216.01,
+    "mean_price": 27.08997267759563,
+    "median_price": 25.65,
+    "std_price": 10.017095619219724,
+    "negative_hours": 9,
+    "generated_at": "2026-01-06T09:27:35.346547"
+  },
+  "PJM": {
+    "iso": "PJM",
+    "year": 2024,
+    "records": 8784,
+    "min_price": 15.77,
+    "max_price": 363.6,
+    "mean_price": 37.80819330601092,
+    "median_price": 35.14,
+    "std_price": 15.447533449596209,
+    "negative_hours": 0,
+    "generated_at": "2026-01-06T09:27:35.428822"
+  },
+  "NYISO": {
+    "iso": "NYISO",
+    "year": 2024,
+    "records": 8784,
+    "min_price": 22.12,
+    "max_price": 500.0,
+    "mean_price": 57.47020377959927,
+    "median_price": 52.65,
+    "std_price": 25.286168244965896,
+    "negative_hours": 0,
+    "generated_at": "2026-01-06T09:27:35.511669"
+  },
+  "ISONE": {
+    "iso": "ISONE",
+    "year": 2024,
+    "records": 8784,
+    "min_price": 19.73,
+    "max_price": 463.31,
+    "mean_price": 49.38597905282332,
+    "median_price": 45.91,
+    "std_price": 19.762609090571427,
+    "negative_hours": 0,
+    "generated_at": "2026-01-06T09:27:35.593296"
+  },
+  "Ercot": {
+    "iso": "Ercot",
+    "year": 2024,
+    "records": 8784,
+    "min_price": -4.89,
+    "max_price": 380.8,
+    "mean_price": 35.22076161202186,
+    "median_price": 31.82,
+    "std_price": 17.687913895801607,
+    "negative_hours": 11,
+    "generated_at": "2026-01-06T09:27:35.678042"
+  }
+}

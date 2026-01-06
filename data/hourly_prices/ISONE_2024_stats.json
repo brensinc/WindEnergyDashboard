@@ -1,0 +1,12 @@
+{
+  "iso": "ISONE",
+  "year": 2024,
+  "records": 8784,
+  "min_price": 19.73,
+  "max_price": 463.31,
+  "mean_price": 49.38597905282332,
+  "median_price": 45.91,
+  "std_price": 19.762609090571427,
+  "negative_hours": 0,
+  "generated_at": "2026-01-06T09:27:35.593296"
+}
