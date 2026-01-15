@@ -32,6 +32,12 @@ app.include_router(analytics.router)
 app.include_router(reports.router)
 
 
+@app.get("/")
+def root():
+    """Root endpoint for health checks."""
+    return {"status": "ok"}
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
