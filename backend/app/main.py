@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 logger.info("STARTUP: Initializing FastAPI application...")
 
 try:
-    from app.config import get_settings
-    logger.info("STARTUP: Loading configuration...")
     settings = get_settings()
     logger.info(f"STARTUP: Configuration loaded - SUPABASE_URL={settings.supabase_url[:50]}...")
     logger.info(f"STARTUP: FRONTEND_URL={settings.frontend_url}")
@@ -27,6 +25,7 @@ except Exception as e:
     raise
 
 # Create FastAPI app
+logger.info("STARTUP: Creating FastAPI app...")
 app = FastAPI(
     title="Wind Energy Dashboard API",
     description="Backend API for wind energy analysis and project management",
@@ -54,6 +53,8 @@ app.include_router(wind.router)
 app.include_router(heatmap.router)
 app.include_router(analytics.router)
 app.include_router(reports.router)
+logger.info("STARTUP: All routers included")
+logger.info("STARTUP: Application fully initialized and ready")
 logger.info("STARTUP: All routers included")
 
 
