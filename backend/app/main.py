@@ -1,10 +1,31 @@
+import logging
+import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers import projects, wind, heatmap, analytics, reports
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
+
+# Log startup initiation
+logger.info("STARTUP: Initializing FastAPI application...")
+
+try:
+    settings = get_settings()
+    logger.info(f"STARTUP: Configuration loaded - SUPABASE_URL={settings.supabase_url[:50]}...")
+    logger.info(f"STARTUP: FRONTEND_URL={settings.frontend_url}")
+except Exception as e:
+    logger.error(f"STARTUP ERROR: Failed to load configuration: {e}")
+    raise
+
 # Create FastAPI app
+logger.info("STARTUP: Creating FastAPI app...")
 app = FastAPI(
     title="Wind Energy Dashboard API",
     description="Backend API for wind energy analysis and project management",
@@ -12,7 +33,7 @@ app = FastAPI(
 )
 
 # Configure CORS
-settings = get_settings()
+logger.info("STARTUP: Configuring CORS...")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -23,13 +44,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+logger.info("STARTUP: CORS configured")
 
 # Include routers
+logger.info("STARTUP: Including routers...")
 app.include_router(projects.router)
 app.include_router(wind.router)
 app.include_router(heatmap.router)
 app.include_router(analytics.router)
 app.include_router(reports.router)
+logger.info("STARTUP: All routers included")
+logger.info("STARTUP: Application fully initialized and ready")
+logger.info("STARTUP: All routers included")
 
 
 @app.get("/")
