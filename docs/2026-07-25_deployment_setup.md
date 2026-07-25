@@ -129,6 +129,50 @@ you'll need to copy it to Railway.
 
 ---
 
+## Next Steps — Deployment
+
+1. **Push the branch and trigger deploy**
+   ```
+   git push origin deployment-setup
+   ```
+   Then follow "First Deploy Flow" above for Railway + Vercel.
+
+2. **Verify health endpoint**
+   After Railway deploys, hit `https://your-app.railway.app/api/health`.
+   Should return `{"status":"healthy","version":"1.0.0"}`.
+
+3. **Verify CORS is working**
+   Open the Vercel frontend → browser DevTools → Network tab → click on map.
+   If requests to Railway get CORS errors, check `FRONTEND_URL` in Railway
+   matches the Vercel URL exactly (no trailing slash).
+
+4. **Test the full flow end-to-end**
+   - Login (Supabase auth via Google/GitHub/email)
+   - Click a location on the map → confirm wind data loads
+   - Save a project → confirm it persists (check Supabase `projects` table)
+   - Open Analytics → confirm charts render (Plotly)
+   - Generate a report → confirm HTML content appears
+
+5. **Set up a custom domain (optional)**
+   Both Railway and Vercel support custom domains in their dashboard Settings.
+   If you add one, update `FRONTEND_URL` and `NEXT_PUBLIC_API_URL` accordingly.
+
+6. **Merge deployment-setup into master** once everything works
+   ```
+   git checkout master
+   git merge deployment-setup
+   ```
+   Everything on `deployment-setup` has been tested and imports verified.
+
+7. **Revisit the stashed turbine model work**
+   ```
+   git stash pop  # on master, after merge
+   ```
+   This adds turbine model presets (NREL 5MW, etc.) to `windlib.py` and
+   corresponding `TurbineModelInfo` types to the frontend.
+
+---
+
 ## Stashed Work on master
 
 Your turbine model library additions (`windlib.py` + `types.ts`) were stashed on
@@ -288,3 +332,13 @@ should target this as the central benchmark.
 
 5. **ISO-level breakdown**: Group validation by ISO (ERCOT, CAISO, MISO, PJM,
    SPP, NYISO, ISO-NE) to identify regional model biases.
+
+---
+
+## Combined Next Steps
+
+1. Get the deployment live (steps above)
+2. Re-run model validation against EIA data
+3. Start using turbine-specific specs from EIA-860
+4. Validate against 2022 and 2024 as well
+5. Add custom domain(s) once everything is stable
