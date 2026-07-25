@@ -3,15 +3,10 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
-import sys
-import os
 import json
 import base64
 from pathlib import Path
 import io
-
-# Add parent directory to path to import windlib
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
 from app.config import get_settings
 
@@ -104,7 +99,7 @@ async def generate_report(request: ReportRequest):
     try:
         import numpy as np
         import pandas as pd
-        import windlib
+        from app import windlib
         from datetime import date
         
         # Import analytics functions

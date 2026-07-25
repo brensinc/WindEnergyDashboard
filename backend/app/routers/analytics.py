@@ -2,13 +2,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from datetime import date, datetime
 from typing import Optional, Literal
-import sys
-import os
 import json
 from pathlib import Path
-
-# Add parent directory to path to import windlib
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -161,7 +156,7 @@ async def get_project_analytics(request: AnalyticsRequest):
     Supports both market pricing (hourly ISO prices) and fixed pricing.
     """
     try:
-        import windlib
+        from app import windlib
         import numpy as np
         import pandas as pd
         
