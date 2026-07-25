@@ -145,3 +145,146 @@ git stash pop
   `verify_data.py`, and tests. The cached heatmap works fine (it uses joblib
   directly), but the generation script and tests referencing it are broken.
 - `__pycache__/` directories scattered around — already gitignored.
+
+---
+
+## Later Session (same date) — EIA Validation Pipeline
+
+### Branch: `master`
+### Worktree: `../WindEnergyDashboard` (primary dev)
+
+After the deployment work, the focus shifted to making the model's capacity factor
+predictions credible to investors/developers. The core insight: **capacity factor
+(%)** is the primary trust metric for the audience, not total revenue. To validate,
+we need to compare model predictions against real-world wind plant data.
+
+### Motivation
+
+Without validation against real-world data, the model's revenue projections are
+just numbers on a page. Investors and developers need to see: "this model predicts
+capacity factor within X% of what 1,278 real US wind plants actually produced."
+The US Energy Information Administration (EIA) publishes exactly this data — plant
+locations, capacities, and monthly generation — for every US power plant ≥1 MW.
+It's the authoritative, public, and free source.
+
+### Problem: EIA-860/923 Files Wouldn't Download
+
+The script `scripts/validate_with_eia.py` was written to fetch EIA-860 (plant
+characteristics) and EIA-923 (monthly generation) and compare model output against
+reported generation. But the download URLs were wrong:
+
+- `https://www.eia.gov/electricity/data/eia860/xls/eia8602023.zip` → 301 redirect
+- `https://www.eia.gov/electricity/data/eia923/xls/f923_2023.zip` → 301 redirect
+
+Both redirected to an HTML page (66 KB saved as "zip"). The cached corrupted files
+then blocked subsequent attempts.
+
+**Root cause**: EIA moved older data years to an `archive/` subdirectory. The
+correct URLs are:
+
+```
+https://www.eia.gov/electricity/data/eia860/archive/xls/eia8602023.zip
+https://www.eia.gov/electricity/data/eia923/archive/xls/f923_2023.zip
+```
+
+**Fix** in `scripts/validate_with_eia.py`:
+- Updated `EIA_860_URL` and `EIA_923_URL` to use `archive/xls/` path
+- Updated all fallback URLs similarly
+- Deleted stale cached HTML files from `data/eia_validation/`
+
+### Problem: Wrong Excel Sheet Match in EIA-860
+
+The EIA-860 ZIP contains multiple `.xlsx` files. The `find_sheet()` function
+searched for "generator" in sheet names, but `6_1_EnviroAssoc_Y2023.xlsx` has a
+sheet named "Boiler Generator" — alphabetically earlier, so it matched first.
+Then the code tried to read generator data from the wrong file.
+
+**Root cause**: `find_sheet()` only checked sheet names, not filenames. It
+returned the correct sheet name ("Boiler Generator") but paired with
+the wrong xlsx file (`2___Plant_Y2023.xlsx`), causing a `WorksheetNotFound`
+error.
+
+**Fix**: Updated `find_sheet()` to also match keywords against the xlsx filename
+(`3_1_Generator_Y2023.xlsx` contains "generator"). The generator xlsx and sheet
+name are now tracked independently from the plant xlsx.
+
+### Problem: Wrong Header Row in EIA-923
+
+The EIA-923 sheet "Page 1 Generation and Fuel Data" was read with `header=4`, but
+row 4 (0-indexed) is the sub-header row with column categories:
+```
+Row 4: ['Total Quantity Consumed In Physical Unit', 'Quantity Consumed In Physical Units For ...', ...]
+Row 5: ['Plant Id', 'Combined Heat And\nPower Plant', 'Nuclear Unit Id', ...]  ← actual column headers
+```
+
+Using `header=4` gave all "Unnamed" columns.
+
+**Fix**: Changed to `header=5`.
+
+Also fixed month column detection — the column naming pattern is `Netgen\nJanuary`
+(not `Net Generation January`), so the lookup now searches for `netgen` in
+the column name and uses `month_labels` only for output naming.
+
+### Problem: Open-Meteo Archive API Unavailable
+
+The script's `compute_model_cf()` calls Open-Meteo's archive API for historical
+wind speed data. During this session, the archive API was returning SSL errors:
+
+```
+SSL: UNEXPECTED_EOF_WHILE_READING
+```
+
+This is a known service issue: https://github.com/open-meteo/open-meteo/issues/1865
+The archive subdomain has been intermittently down.
+
+**Fix**: Multiple layers of resilience:
+1. `windlib.fetch_open_meteo_archive()` now catches all exceptions and returns an
+   empty DataFrame instead of crashing
+2. `compute_model_cf()` retries 3 times with 1-second backoff
+3. `run_validation()` checks API availability at the start with a probe request
+4. If API is down, the script gracefully reports population-level statistics from
+   EIA data alone and skips per-plant model comparison
+
+### Result: Working Validation Pipeline
+
+```
+EIA-860:  1,331 wind plants, 147,998 MW total
+EIA-923:  1,327 wind plants, 421.02 TWh annual generation
+Merged:   1,278 wind plants (after CF filter of 0.05–0.65)
+
+Population capacity factor (EIA actual):
+  Mean:    30.1%
+  Median:  29.9%
+  P10:     16.5%
+  P90:     43.4%
+  Std Dev: 10.2%
+  Total gen: 418.57 TWh
+```
+
+This means the US wind fleet averaged ~30% capacity factor in 2023. The model
+should target this as the central benchmark.
+
+### Plans / Next Steps
+
+1. **Re-run model comparison when Open-Meteo archive recovers**
+   ```
+   python scripts/validate_with_eia.py --sample 50
+   ```
+   Expected output: per-plant MAE/RMSE/MBE/R² against 50 stratified wind plants.
+
+2. **Switch to alternative wind data source** if the archive API remains
+   unreliable:
+   - ERA5 CDS API (requires registration but is the gold standard)
+   - NREL Wind Toolkit API (has 100m wind speeds for US at hourly resolution)
+   - NASA POWER API (50m wind — lower but usable with height extrapolation)
+
+3. **Use EIA-860 `3_2_Wind_Y2023.xlsx` for turbine-specific modeling**:
+   This sheet contains hub height, rotor diameter, and turbine make/model for
+   each wind turbine. Currently the validation uses a generic 3MW turbine — using
+   site-specific turbine parameters would significantly improve accuracy.
+
+4. **Multi-year validation**: Validate against 2022, 2024 data once URLs are
+   confirmed. This accounts for interannual wind variability.
+
+5. **ISO-level breakdown**: Group validation by ISO (ERCOT, CAISO, MISO, PJM,
+   SPP, NYISO, ISO-NE) to identify regional model biases.
