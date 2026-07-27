@@ -74,6 +74,8 @@ Decision: Railway (backend) + Vercel (frontend). Provider subdomains for both.
 - Tells Railway to use Nixpacks builder
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
   (no `--app-dir backend` — Root Directory set to `/backend` in Railway dashboard)
+- Added `requests` and `timezonefinder` to `backend/requirements.txt` (were
+  missing — windlib.py imports them directly)
 - Healthcheck path: `/api/health`
 - Auto-restart on failure (max 10 retries)
 
