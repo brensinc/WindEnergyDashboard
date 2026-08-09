@@ -1,10 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
 from datetime import date
-import sys
-import os
-
-# Add parent directory to path to import windlib
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
 from app.models.wind_data import WindDataResponse, RevenueDataResponse
 
@@ -25,8 +20,7 @@ async def get_wind_data(
     Fetch wind data for a location and calculate power output.
     """
     try:
-        # Import windlib here to avoid loading heavy dependencies at startup
-        import windlib
+        from app import windlib
         
         # Parse dates
         start = date.fromisoformat(start_date)
@@ -99,7 +93,7 @@ async def get_revenue_data(
     Fetch wind data and calculate revenue using market prices.
     """
     try:
-        import windlib
+        from app import windlib
         
         # Parse dates
         start = date.fromisoformat(start_date)

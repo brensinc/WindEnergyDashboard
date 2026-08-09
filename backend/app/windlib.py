@@ -719,7 +719,7 @@ def interannual_variability(df_hist: pd.DataFrame) -> pd.DataFrame:
 # ISO Price Functions
 # -----------------------------
 
-ISO_PRICES_CACHE_DIR = Path("data")
+ISO_PRICES_CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 ISO_PRICES_CACHE_FILE = ISO_PRICES_CACHE_DIR / "iso_prices_2024.json"
 
 ISO_DEFAULT_PRICES = {

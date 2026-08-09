@@ -2,18 +2,13 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from datetime import date, datetime
 from typing import Optional, Literal
-import sys
-import os
 import json
 from pathlib import Path
-
-# Add parent directory to path to import windlib
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 # Path to cached hourly prices
-HOURLY_PRICES_DIR = Path(__file__).parent.parent.parent.parent / "data" / "hourly_prices"
+HOURLY_PRICES_DIR = Path(__file__).parent.parent.parent / "data" / "hourly_prices"
 
 
 class AnalyticsRequest(BaseModel):
@@ -116,7 +111,7 @@ def load_hourly_prices(iso_name: str, year: int = 2024):
 
 def load_iso_annual_prices() -> dict:
     """Load cached ISO annual average prices from data file."""
-    data_path = Path(__file__).parent.parent.parent.parent / "data" / "iso_prices_2024.json"
+    data_path = Path(__file__).parent.parent.parent / "data" / "iso_prices_2024.json"
     if data_path.exists():
         return json.loads(data_path.read_text())
     return {
@@ -161,7 +156,7 @@ async def get_project_analytics(request: AnalyticsRequest):
     Supports both market pricing (hourly ISO prices) and fixed pricing.
     """
     try:
-        import windlib
+        from app import windlib
         import numpy as np
         import pandas as pd
         

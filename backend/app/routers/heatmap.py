@@ -15,7 +15,7 @@ def get_heatmap_data():
     global _heatmap_cache
     if _heatmap_cache is None:
         # Look for heatmap file in data directory
-        data_path = Path(__file__).parent.parent.parent.parent / "data" / "heatmap_cache_2024.joblib"
+        data_path = Path(__file__).parent.parent.parent / "data" / "heatmap_cache_2024.joblib"
         if not data_path.exists():
             return None
         _heatmap_cache = joblib.load(data_path)

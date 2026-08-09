@@ -38,7 +38,6 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         settings.frontend_url,
-        "http://localhost:3000",  # Local development
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -55,7 +54,6 @@ app.include_router(analytics.router)
 app.include_router(reports.router)
 logger.info("STARTUP: All routers included")
 logger.info("STARTUP: Application fully initialized and ready")
-logger.info("STARTUP: All routers included")
 
 
 @app.get("/")
